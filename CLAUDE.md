@@ -14,7 +14,8 @@
    node .agents/dispatch.mjs run --agent qwen  --name <name> --task-file .agent-tasks/<name>.md
    node .agents/dispatch.mjs run --agent codex --name <name> --task-file .agent-tasks/<name>.md [--effort high]
    ```
-   - qwen 一次只跑一個（共用本機 GPU）；codex 最多同時兩個，可以放到背景執行。
+   - 派工指令會跑好幾分鐘（qwen 一個小任務約 2–5 分鐘，codex 約 1–10 分鐘）：一律用背景執行（run_in_background），完成時會收到通知，不要用前景等待或輪詢。
+   - qwen 一次只跑一個（共用本機 GPU）；codex 最多同時兩個。
    - 任務彼此有相依時，等前一個合併後再派下一個。
 4. 審查每個工人的結果：讀 dispatch 回傳的摘要，再看 `git diff <base>...agent/<name>`，自己執行測試確認。工人的摘要可能不正確，以 diff 和測試為準。
 5. 不合格：寫清楚哪裡不對，用新的 `--name`（例如 `<name>-2`）改派 codex 重做。
