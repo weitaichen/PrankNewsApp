@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111820">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="新聞快報">
+    <meta name="description" content="隨時收聽今日新聞快報。">
+    <title>新聞快報</title>
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" type="image/png" href="./icon-192.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+    <link rel="stylesheet" href="./style.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <main class="player" aria-labelledby="episode-title">
+      <header class="masthead">
+        <span class="brand-mark" aria-hidden="true">◉</span>
+        <span>新聞快報</span>
+        <span class="masthead-label">PODCAST</span>
+      </header>
+
+      <img id="cover" class="cover" src="./cover.png" width="512" height="512" alt="新聞快報節目封面">
+
+      <section class="episode-info">
+        <p id="show" class="show-name">晨間新聞快報</p>
+        <h1 id="episode-title">正在載入單集…</h1>
+        <p class="byline"><span id="anchor"></span><span id="published"></span></p>
+      </section>
+
+      <section class="playback" aria-label="播放控制">
+        <label class="sr-only" for="progress">播放進度</label>
+        <input id="progress" class="progress" type="range" min="0" max="180" value="0" step="0.1" disabled>
+        <div class="time-row" aria-hidden="true"><span id="elapsed">0:00</span><span id="duration">3:00</span></div>
+        <div class="controls">
+          <button id="backward" class="skip-button" type="button" aria-label="倒退 15 秒" disabled>
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M11 16a17 17 0 1 1-3 19M11 7v10H1"/></svg><span>15</span>
+          </button>
+          <button id="play" class="play-button" type="button" aria-label="播放" disabled>
+            <svg id="play-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M10 5 27 16 10 27Z"/></svg>
+            <svg id="pause-icon" viewBox="0 0 32 32" aria-hidden="true" hidden><path d="M8 6h6v20H8zM19 6h6v20h-6z"/></svg>
+          </button>
+          <button id="forward" class="skip-button" type="button" aria-label="快轉 30 秒" disabled>
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M37 16a17 17 0 1 0 3 19M37 7v10h10"/></svg><span>30</span>
+          </button>
+        </div>
+      </section>
+
+      <p id="message" class="message" role="status" aria-live="polite">正在準備音訊…</p>
+      <button id="retry" class="retry-button" type="button" hidden>重新檢查音訊</button>
+      <p id="offline-status" class="offline-status" role="status" aria-live="polite"></p>
+
+      <section class="description-section" aria-labelledby="description-heading">
+        <h2 id="description-heading">關於本集</h2>
+        <p id="description">今日頭條新聞</p>
+      </section>
+      <footer>每日新聞 · 隨時收聽</footer>
+    </main>
+    <audio id="audio" preload="auto" playsinline></audio>
+    <noscript><p class="message">請開啟 JavaScript 以使用播放器。</p></noscript>
+  </body>
+</html>
