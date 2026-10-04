@@ -73,7 +73,7 @@ def build_app(
             "durationSec": round(episode.duration_sec, 3),
             "audio": "episode.mp3",
             "cover": "cover.png",
-            "description": " ".join(episode.script.split())[:200],
+            "description": "今日頭條新聞",
         }
         (staged / "episode.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

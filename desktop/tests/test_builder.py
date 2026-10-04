@@ -23,8 +23,11 @@ def test_build_structure_metadata_and_headers(tmp_path, template, episode):
         "show": episode.show, "title": episode.title, "anchor": episode.anchor,
         "published": "2026-10-04", "durationSec": 180.25,
         "audio": "episode.mp3", "cover": "cover.png",
-        "description": "各位聽眾早安。 王小明的吐司開始唱歌。",
+        "description": "今日頭條新聞",
     }
+    assert "王小明" in episode.script
+    metadata = json.loads((output / "episode.json").read_text(encoding="utf-8"))
+    assert "王小明" not in json.dumps(metadata, ensure_ascii=False)
     headers = json.loads((output / "vercel.json").read_text())["headers"]
     assert headers == [
         {"source": "/sw.js", "headers": [{"key": "Cache-Control", "value": "no-cache"}]},

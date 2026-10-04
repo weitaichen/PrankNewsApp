@@ -81,8 +81,8 @@ def generate_script(
     run = runner or subprocess.run
     try:
         completed = run(
-            [executable, "-p", build_prompt(request), "--output-format", "json"],
-            stdin=subprocess.DEVNULL,
+            [executable, "-p", "--output-format", "json"],
+            input=build_prompt(request),
             capture_output=True,
             text=True,
             encoding="utf-8",

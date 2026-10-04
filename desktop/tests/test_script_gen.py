@@ -40,6 +40,7 @@ def test_markdown_cleanup():
 
 
 def test_runner_receives_prompt_utf8_and_timeout(monkeypatch, request_data):
+    request_data.topic += '\n100% ^ " & special report'
     monkeypatch.setattr(script_gen.shutil, "which", lambda name: "C:/tools/claude.cmd")
     captured = {}
 
@@ -48,8 +49,11 @@ def test_runner_receives_prompt_utf8_and_timeout(monkeypatch, request_data):
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": "節目：早安\n主播：雅婷\n\n早安。"}))
 
     assert script_gen.generate_script(request_data, runner=runner, timeout=12) == ("早安", "雅婷", "早安。")
-    assert captured["command"] == ["C:/tools/claude.cmd", "-p", script_gen.build_prompt(request_data), "--output-format", "json"]
-    assert captured["stdin"] == subprocess.DEVNULL
+    assert captured["command"] == ["C:/tools/claude.cmd", "-p", "--output-format", "json"]
+    prompt = script_gen.build_prompt(request_data)
+    assert all(prompt not in arg and request_data.topic not in arg for arg in captured["command"])
+    assert captured["input"] == prompt
+    assert "stdin" not in captured
     assert captured["timeout"] == 12
     assert captured["encoding"] == "utf-8"
 
