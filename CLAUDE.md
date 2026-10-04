@@ -21,6 +21,8 @@
 5. 不合格：寫清楚哪裡不對，用新的 `--name`（例如 `<name>-2`）改派 codex 重做。
 6. 合格：**先告訴使用者要合併哪些分支、為什麼，等使用者同意**，再執行 `git merge --no-ff agent/<name>`，之後 `node .agents/dispatch.mjs cleanup --name <name>`。
 7. 隨時可以用 `node .agents/dispatch.mjs status` 查看所有工人分支。
+8. 使用者問工人是否連得上，或工人執行失敗時：先跑 `node .agents/dispatch.mjs check`（不花額度），需要確認真的能回應再加 `--live`。
+   本機 Qwen 偶爾會在載入模型時失敗（CUDA 初始化錯誤）；派工腳本會自動重試，仍失敗就改派 codex，並告訴使用者。
 
 ## 規則
 

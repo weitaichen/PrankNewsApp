@@ -5,6 +5,7 @@
 //        [--task "<text>"] [--model <m>] [--effort low|medium|high] [--base <branch>] [--timeout-min 30]
 //   node .agents/dispatch.mjs status
 //   node .agents/dispatch.mjs cleanup --name <slug> [--force]
+//   node .agents/dispatch.mjs check [--live]     # are the codex and qwen workers reachable?
 //
 // Each worker gets its own git worktree (../<repo>-worktrees/<slug>) on branch agent/<slug>.
 // The task goes to the worker on stdin (never through the command line). Whatever the worker
@@ -119,6 +120,10 @@ async function runWorker(o) {
   const branch = `agent/${o.name}`
   const wt = path.join(worktreesDir, o.name)
   if (existsSync(wt)) throw new Error(`worktree already exists: ${wt} — use another --name or run cleanup`)
+  if (agent === 'qwen') {
+    const warm = await warmQwen()
+    if (!warm.ok) throw new Error(`local Qwen model did not load after ${warm.attempts} attempts (${warm.error}); restart Ollama or send this task to codex`)
+  }
   mkdirSync(worktreesDir, { recursive: true })
   git(['worktree', 'add', '-q', '-b', branch, wt, base], repoRoot)
 
@@ -203,6 +208,120 @@ function status() {
     }))
 }
 
+// Reads the model Qwen Code is configured to use (~/.qwen/settings.json, then ~/.qwen/.env).
+function qwenConfiguredModel() {
+  const dir = path.join(os.homedir(), '.qwen')
+  try {
+    const name = JSON.parse(readFileSync(path.join(dir, 'settings.json'), 'utf8'))?.model?.name
+    if (name) return name
+  } catch {}
+  try {
+    return readFileSync(path.join(dir, '.env'), 'utf8').match(/^OPENAI_MODEL=(.+)$/m)?.[1]?.trim() ?? null
+  } catch {
+    return null
+  }
+}
+
+function qwenBaseUrl() {
+  try {
+    const url = readFileSync(path.join(os.homedir(), '.qwen', '.env'), 'utf8').match(/^OPENAI_BASE_URL=(.+)$/m)?.[1]?.trim()
+    if (url) return url.replace(/\/v1\/?$/, '')
+  } catch {}
+  return 'http://127.0.0.1:11434'
+}
+
+// Loads the local model before a qwen worker starts. On this laptop the CUDA runner occasionally
+// fails to initialise on load ("llama-server process has terminated: 0xc0000409"); a retry works.
+async function warmQwen(prompt = 'Reply with exactly one word: PONG') {
+  const model = qwenConfiguredModel()
+  const base = qwenBaseUrl()
+  if (!model) return { ok: false, attempts: 0, error: 'no model configured in ~/.qwen' }
+  let last = ''
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const started = Date.now()
+    try {
+      const res = await fetch(`${base}/api/chat`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(180_000),
+        body: JSON.stringify({ model, stream: false, think: false, messages: [{ role: 'user', content: prompt }] })
+      })
+      const body = await res.json()
+      if (res.ok && !body.error) {
+        return { ok: true, attempts: attempt, seconds: Math.round((Date.now() - started) / 1000), text: String(body.message?.content ?? '').trim() }
+      }
+      last = String(body.error ?? `HTTP ${res.status}`)
+    } catch (e) {
+      last = e.message
+    }
+    await new Promise((r) => setTimeout(r, 3_000))
+  }
+  return { ok: false, attempts: 3, error: last }
+}
+
+async function check(o) {
+  const rows = []
+  const add = (worker, item, ok, detail) => rows.push({ worker, item, ok, detail })
+  const quick = (file, args, input) => runProcess(file, args, { cwd: repoRoot, input: input ?? '', timeoutMs: 180_000 })
+
+  // codex
+  const codex = resolveCodex()
+  const ver = await quick(codex, ['--version'])
+  add('codex', 'installed', ver.code === 0, ver.code === 0 ? `${ver.stdout.trim()} (${codex})` : 'codex not found')
+  if (ver.code === 0) {
+    const login = await quick(codex, ['login', 'status'])
+    add('codex', 'signed in', login.code === 0, (login.stdout + login.stderr).trim().split(/\r?\n/)[0] || `exit ${login.code}`)
+    if (o.live && login.code === 0) {
+      const r = await quick(
+        codex,
+        ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '-m', DEFAULTS.codex.model, '-c', 'model_reasoning_effort=low', '-'],
+        'Reply with exactly one word: PONG'
+      )
+      add('codex', `live reply (${DEFAULTS.codex.model})`, r.code === 0 && /PONG/.test(r.stdout), r.code === 0 ? `${r.stdout.trim().slice(-60)} in ${r.seconds}s` : (r.stderr || r.stdout).trim().slice(-200))
+    }
+  }
+
+  // qwen
+  let entry = null
+  try {
+    entry = resolveQwen()
+  } catch (e) {
+    add('qwen', 'installed', false, e.message)
+  }
+  if (entry) {
+    const v = await quick(process.execPath, [entry, '--version'])
+    add('qwen', 'installed', v.code === 0, v.code === 0 ? `Qwen Code ${v.stdout.trim()}` : `exit ${v.code}`)
+  }
+  const model = qwenConfiguredModel()
+  const base = qwenBaseUrl()
+  add('qwen', 'configured model', Boolean(model), model ?? 'no model in ~/.qwen/settings.json or ~/.qwen/.env')
+  try {
+    const version = await (await fetch(`${base}/api/version`, { signal: AbortSignal.timeout(5_000) })).json()
+    add('qwen', 'ollama running', true, `Ollama ${version.version} at ${base}`)
+    const tags = await (await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(5_000) })).json()
+    const names = (tags.models ?? []).map((m) => m.name)
+    const present = model && names.some((n) => n === model || n === `${model}:latest`)
+    add('qwen', 'model downloaded', Boolean(present), present ? model : `not found; have: ${names.join(', ') || 'none'}`)
+    if (o.live && present) {
+      const w = await warmQwen()
+      add(
+        'qwen',
+        `live reply (${model}, local)`,
+        w.ok && /PONG/i.test(w.text),
+        w.ok ? `${w.text.slice(0, 60)} in ${w.seconds}s${w.attempts > 1 ? ` (after ${w.attempts} attempts)` : ''}` : `${w.error} — restart Ollama, or send the task to codex`
+      )
+    }
+  } catch (e) {
+    add('qwen', 'ollama running', false, `cannot reach ${base}: ${e.message} — start Ollama`)
+  }
+
+  const ok = rows.every((r) => r.ok)
+  return {
+    ok,
+    live: Boolean(o.live),
+    checks: rows.map((r) => `${r.ok ? 'OK  ' : 'FAIL'}  ${r.worker.padEnd(5)}  ${r.item.padEnd(28)}  ${r.detail}`)
+  }
+}
+
 function cleanup(o) {
   if (!SLUG_RE.test(o.name ?? '')) throw new Error('--name is required')
   const wt = path.join(worktreesDir, o.name)
@@ -221,15 +340,29 @@ const { values, positionals } = parseArgs({
     effort: { type: 'string' },
     base: { type: 'string' },
     'timeout-min': { type: 'string' },
-    force: { type: 'boolean', default: false }
+    force: { type: 'boolean', default: false },
+    live: { type: 'boolean', default: false }
   }
 })
 
 try {
   const cmd = positionals[0]
   const result =
-    cmd === 'run' ? await runWorker(values) : cmd === 'status' ? status() : cmd === 'cleanup' ? cleanup(values) : null
-  if (result === null) throw new Error('usage: dispatch.mjs run|status|cleanup (see header)')
+    cmd === 'run'
+      ? await runWorker(values)
+      : cmd === 'status'
+        ? status()
+        : cmd === 'cleanup'
+          ? cleanup(values)
+          : cmd === 'check'
+            ? await check(values)
+            : null
+  if (result === null) throw new Error('usage: dispatch.mjs run|status|cleanup|check (see header)')
+  if (cmd === 'check') {
+    console.log(result.checks.join('\n'))
+    console.log(result.ok ? '\nAll workers reachable.' : '\nSome checks failed — see FAIL lines.')
+    process.exit(result.ok ? 0 : 1)
+  }
   console.log(JSON.stringify(result, null, 2))
 } catch (e) {
   console.error(`dispatch: ${e.message}`)
