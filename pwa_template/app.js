@@ -12,6 +12,7 @@ let episode;
 let registration;
 let previewing = false;
 let audioAvailable = false;
+let audioCheck = 0;
 
 function formatTime(seconds) {
   const value = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -138,9 +139,12 @@ function renderEpisode(data) {
 }
 
 function applyCacheStatus(status) {
+  // The worker's committed metadata and media are always one episode.
+  if (status.episode) renderEpisode(status.episode);
   audioAvailable = status.audioAvailable === true;
   playButton.disabled = !audioAvailable;
-  offlineStatus.textContent = status.offlineReady ? '已可離線收聽' : '';
+  offlineStatus.textContent = status.offlineReady ? '已可離線收聽'
+    : audioAvailable ? '目前無法離線儲存，請保持連線收聽' : '';
   retry.hidden = audioAvailable;
   if (audioAvailable) {
     if (audio.src !== episode.audio || audio.error) {
@@ -160,7 +164,7 @@ function applyCacheStatus(status) {
 
 function askWorker(type) {
   return new Promise((resolve, reject) => {
-    const worker = registration?.active;
+    const worker = navigator.serviceWorker?.controller || registration?.active;
     if (!worker) { reject(new Error('Service worker unavailable.')); return; }
     const channel = new MessageChannel();
     const timeout = setTimeout(() => {
@@ -177,21 +181,30 @@ function askWorker(type) {
 }
 
 async function checkAudio(refresh = false) {
+  const check = ++audioCheck;
   retry.disabled = true;
   message.textContent = '正在準備音訊與離線收聽…';
   try {
-    if (registration?.active) {
-      applyCacheStatus(await askWorker(refresh ? 'CACHE_EPISODE' : 'GET_CACHE_STATUS'));
+    if (navigator.serviceWorker?.controller || registration?.active) {
+      const status = await askWorker(refresh ? 'CACHE_EPISODE' : 'GET_CACHE_STATUS');
+      if (!status.audioAvailable) {
+        const response = await fetch(status.episode ? assetURL(status.episode.audio) : episode.audio,
+          { method: 'HEAD', cache: 'no-store' });
+        status.audioAvailable = response.ok;
+      }
+      if (check === audioCheck) applyCacheStatus(status);
     } else {
       // Playback still works in browsers without service worker support.
       const response = await fetch(episode.audio, { method: 'HEAD', cache: 'no-store' });
-      applyCacheStatus({ audioAvailable: response.ok, offlineReady: false });
+      if (check === audioCheck) applyCacheStatus({ audioAvailable: response.ok, offlineReady: false });
     }
   } catch {
-    message.textContent = '目前無法取得音訊，請確認連線後重新檢查。';
-    retry.hidden = false;
+    if (check === audioCheck) {
+      message.textContent = '目前無法取得音訊，請確認連線後重新檢查。';
+      retry.hidden = false;
+    }
   } finally {
-    retry.disabled = false;
+    if (check === audioCheck) retry.disabled = false;
   }
 }
 
@@ -224,10 +237,10 @@ async function initialize() {
     ? prepareWorker()
     : Promise.resolve(null);
   try {
-    const response = await fetch('./episode.json');
+    const response = await fetch('./episode.json', { cache: 'no-store' });
     if (!response.ok) throw new Error('Episode unavailable.');
     renderEpisode(await response.json());
-    registration = await workerReady;
+    registration = (await workerReady) || registration;
     await checkAudio();
   } catch {
     message.textContent = '暫時無法載入單集，請確認連線後重新開啟。';
@@ -238,10 +251,28 @@ async function initialize() {
 async function prepareWorker() {
   let timeout;
   try {
-    await navigator.serviceWorker.register('./sw.js');
+    const registered = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+    // These listeners outlive the initial timeout. Claiming a new worker reloads
+    // its committed JSON, so an open installed PWA switches the entire episode.
+    const recheck = async ready => {
+      registration = ready || registered || registration;
+      if (!episode) return;
+      try {
+        // applyCacheStatus switches committed metadata and audio synchronously.
+        // Do not show a new title while waiting for its audio status reply.
+        await checkAudio();
+      } catch { /* Keep the currently playable episode during a connection loss. */ }
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      void recheck(registered);
+    });
+    const ready = navigator.serviceWorker.ready.then(async value => {
+      await recheck(value);
+      return value;
+    });
     // ready does not reject when installation fails (e.g. storage quota).
     return await Promise.race([
-      navigator.serviceWorker.ready,
+      ready,
       new Promise(resolve => { timeout = setTimeout(() => resolve(null), 30000); }),
     ]);
   } catch {

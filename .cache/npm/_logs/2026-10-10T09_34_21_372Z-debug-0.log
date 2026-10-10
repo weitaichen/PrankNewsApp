@@ -1,0 +1,47 @@
+0 verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+1 info using npm@11.12.1
+2 info using node@v24.15.0
+3 silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+4 silly config load:file:C:\project\Jeff\PrankNewApp-worktrees\desktop-gui-2\.npmrc
+5 silly config load:file:C:\Users\user\.npmrc
+6 silly config load:file:C:\Users\user\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm exec vercel deploy --help
+8 verbose argv "exec" "--cache" "./.cache/npm" "--fetch-retries" "0" "--fetch-timeout" "15000" "--" "vercel" "deploy" "--help"
+9 verbose logfile logs-max:10 dir:C:\project\Jeff\PrankNewApp-worktrees\desktop-gui-2\.cache\npm\_logs\2026-10-10T09_34_21_372Z-
+10 verbose logfile C:\project\Jeff\PrankNewApp-worktrees\desktop-gui-2\.cache\npm\_logs\2026-10-10T09_34_21_372Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+13 http fetch GET https://registry.npmjs.org/vercel attempt 1 failed with EACCES
+14 verbose type system
+15 verbose stack FetchError: request to https://registry.npmjs.org/vercel failed, reason: 
+15 verbose stack     at ClientRequest.<anonymous> (C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\index.js:130:14)
+15 verbose stack     at ClientRequest.emit (node:events:509:28)
+15 verbose stack     at emitErrorEvent (node:_http_client:109:11)
+15 verbose stack     at _destroy (node:_http_client:993:9)
+15 verbose stack     at onSocketNT (node:_http_client:1013:5)
+15 verbose stack     at process.processTicksAndRejections (node:internal/process/task_queues:91:21)
+16 error code EACCES
+17 error errno EACCES
+18 error FetchError: request to https://registry.npmjs.org/vercel failed, reason: 
+18 error     at ClientRequest.<anonymous> (C:\Program Files\nodejs\node_modules\npm\node_modules\minipass-fetch\lib\index.js:130:14)
+18 error     at ClientRequest.emit (node:events:509:28)
+18 error     at emitErrorEvent (node:_http_client:109:11)
+18 error     at _destroy (node:_http_client:993:9)
+18 error     at onSocketNT (node:_http_client:1013:5)
+18 error     at process.processTicksAndRejections (node:internal/process/task_queues:91:21) {
+18 error   code: 'EACCES',
+18 error   errno: 'EACCES',
+18 error   type: 'system'
+18 error }
+19 error
+19 error The operation was rejected by your operating system.
+19 error It's possible that the file was already in use (by a text editor or antivirus), or that you lack permissions to access it.
+19 error
+19 error If you believe this might be a permissions issue, please double-check the permissions of the file and its containing directories, or try running the command again as root/Administrator.
+20 verbose cwd C:\project\Jeff\PrankNewApp-worktrees\desktop-gui-2
+21 verbose os Windows_NT 10.0.26200
+22 verbose node v24.15.0
+23 verbose npm  v11.12.1
+24 verbose exit 1
+25 verbose code 1
+26 error A complete log of this run can be found in: C:\project\Jeff\PrankNewApp-worktrees\desktop-gui-2\.cache\npm\_logs\2026-10-10T09_34_21_372Z-debug-0.log

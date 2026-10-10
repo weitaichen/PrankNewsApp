@@ -13,7 +13,7 @@ template_data = []
 for source in sorted(template_dir.rglob("*")):
     relative = source.relative_to(template_dir)
     if not source.is_file() or any(
-        part in {"tests", "README.md", ".git", "__pycache__", ".pytest_cache"}
+        part in {"tests", "README.md", ".git", ".vercel", "node_modules", "__pycache__", ".pytest_cache"}
         for part in relative.parts
     ):
         continue

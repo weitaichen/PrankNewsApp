@@ -6,8 +6,6 @@ import os
 from pathlib import Path
 from queue import Empty, Queue
 import re
-import secrets
-import string
 import tempfile
 import threading
 import tkinter as tk
@@ -19,6 +17,7 @@ from PIL import Image, ImageTk
 
 from .deploy import DeploymentError, deploy, make_qr
 from .models import Episode, NewsRequest
+from .project import default_project_name, validate_project_name
 from .pipeline import build_and_deploy, synthesize_episode
 from .script_gen import ScriptGenerationError, generate_script
 from .tts import SynthesisError
@@ -48,18 +47,6 @@ def script_character_count(script: str) -> int:
 
 def estimate_minutes(script: str) -> float:
     return script_character_count(script) / 250
-
-
-def default_project_name() -> str:
-    alphabet = string.ascii_lowercase + string.digits
-    return "morning-news-" + "".join(secrets.choice(alphabet) for _ in range(6))
-
-
-def validate_project_name(name: str) -> str:
-    """Use the same 1–100 character rule as deploy.deploy."""
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?", name):
-        raise ValueError("Vercel 專案名稱請使用 1–100 個小寫英文字母、數字或中間連字號。")
-    return name
 
 
 def output_directory(base_dir: str | Path, when: datetime) -> Path:
@@ -216,7 +203,11 @@ class PrankNewsWindow:
             row=6, column=0, sticky="ew", pady=(4, 0))
 
     def _update_topic_hint(self, event=None) -> None:
-        if not self.topic.get("1.0", "end-1c") and self.root.focus_get() != self.topic:
+        try:
+            focused = self.root.focus_get()
+        except KeyError:  # ttk's native Combobox popdown is not a Python widget.
+            focused = None
+        if not self.topic.get("1.0", "end-1c") and focused != self.topic:
             self.topic_hint.place(x=5, y=3)
         else:
             self.topic_hint.place_forget()
@@ -313,7 +304,9 @@ class PrankNewsWindow:
                     self._refresh_buttons()
         except Empty:
             pass
-        self.poll_id = self.root.after(80, self._poll_events)
+        finally:
+            if not self.closed:
+                self.poll_id = self.root.after(80, self._poll_events)
 
     def _error_message(self, exc: Exception) -> str:
         if isinstance(exc, (ScriptGenerationError, DeploymentError, SynthesisError, ValueError)):
@@ -356,6 +349,11 @@ class PrankNewsWindow:
         self._start(job, completed, "正在產生新聞稿…")
 
     def _build(self) -> None:
+        if self.busy:
+            return
+        # Each build is a new episode. The entry remains editable before deploy.
+        self.project.set(default_project_name())
+        passenger_names = parse_names(self.names.get())
         show, anchor = self.show.get().strip(), self.anchor.get().strip()
         script = self.script.get("1.0", "end-1c")
         voice = VOICES[self.voice.get()]
@@ -365,7 +363,8 @@ class PrankNewsWindow:
             output.parent.mkdir(parents=True, exist_ok=True)
             # Never place temporary synthesis work inside the directory the builder replaces.
             with tempfile.TemporaryDirectory(prefix="prank-news-", dir=output.parent) as temp:
-                episode = synthesize_episode(show, anchor, script, voice, temp, self._progress)
+                episode = synthesize_episode(show, anchor, script, voice, temp, self._progress,
+                                             passenger_names=passenger_names)
                 result = build_and_deploy(episode, output, deploy=False, progress=self._progress)
             return episode, result["out_dir"]
 

@@ -62,10 +62,10 @@ python -m http.server 8000
 
 ## 離線與版本
 
-SW 安裝時快取殼層、`episode.json`，並從設定讀取封面與完整音檔。下載完成前，首次載入會顯示準備提示；完整音檔可用後才設定 audio 的 `src`。只有殼層、單集資料、封面、完整音檔都快取成功，才顯示「已可離線收聽」。缺檔或下載失敗不會讓殼層安裝失敗，也不會產生不實的完成提示。
+SW 安裝時快取殼層，再下載封面與完整音檔，兩者寫入成功後才提交 `episode.json`。只有殼層、單集資料、封面、完整音檔都快取成功，才顯示「已可離線收聽」。已有完整舊版時，新版素材下載或寫入失敗會拒絕新版接管，保留舊節目與音檔。首次使用若儲存空間不足但網路可取得音檔，仍允許串流並顯示「目前無法離線儲存，請保持連線收聽」。初次等待逾時後仍監聽 worker 就緒與 controllerchange，完成後會更新狀態。
 
 `buildRangeResponse(fullResponse, rangeHeader)` 只讀取完整 Response 的 clone，不使用網路或快取。支援 `bytes=0-1`、`bytes=100-`、`bytes=-50` 等單一 byte range，回傳 206 與正確的 `Content-Range`、`Content-Length`、`Accept-Ranges: bytes`；不可滿足的範圍回 416 與 `bytes */總長`；無 Range 回完整 200。超出檔尾的 end 截至檔尾，過長的 suffix 回整份 206。未支援的 multipart 或格式錯誤的 Range 會忽略並回完整 200。Worker 不會快取 206 部分回應。
 
-快取版本是 `sw.js` 的常數 `CACHE_VERSION`。全新部署網址會有全新快取；若重用相同網址替換內容，需增加此版本或在開發工具移除 SW 與站台快取。activate 只清除此 SW scope 的舊版本，避免影響同源其他應用程式。
+`sw.js` 的 `CACHE_VERSION` 使用 `__BUILD_ID__` 佔位字串；desktop builder 每次建置以時間戳與隨機值替換，並在 JSON 加入同一個 `buildId`，音檔／封面 URL 附上 `?v=<id>`。每個版本使用獨立 cache；同網址更新時，新 worker 完整下載後才接管，頁面一併更新標題與音檔。activate 只清除此 scope 的舊版本。原始範本的佔位字串也可作快取版本直接執行；若手動複製範本而未使用 builder，替換單集時須同步更換 worker 版本與素材網址。
 
 離線資料仍受瀏覽器儲存空間限制，系統可能清除快取。Media Session 可提供 CarPlay/鎖定畫面 metadata 與控制，但實際顯示方式與 action 支援取決於 iOS、Safari 及車機；靜態 PWA 無法保證每台車機的介面一致。

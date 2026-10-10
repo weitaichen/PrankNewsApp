@@ -19,10 +19,13 @@ def test_build_structure_metadata_and_headers(tmp_path, template, episode):
     assert (output / "assets" / "app.js").is_file()
     assert (output / "episode.mp3").read_bytes() == episode.audio_path.read_bytes()
     assert (output / "cover.png").read_bytes() == b"template-cover"
-    assert json.loads((output / "episode.json").read_text(encoding="utf-8")) == {
+    built = json.loads((output / "episode.json").read_text(encoding="utf-8"))
+    build_id = built["buildId"]
+    assert built == {
+        "buildId": build_id,
         "show": episode.show, "title": episode.title, "anchor": episode.anchor,
         "published": "2026-10-04", "durationSec": 180.25,
-        "audio": "episode.mp3", "cover": "cover.png",
+        "audio": f"episode.mp3?v={build_id}", "cover": f"cover.png?v={build_id}",
         "description": "今日頭條新聞",
     }
     assert "王小明" in episode.script
@@ -73,3 +76,27 @@ def test_default_template_source_and_frozen(monkeypatch, tmp_path):
     assert default_template_dir() == Path(__file__).resolve().parents[2] / "pwa_template"
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     assert default_template_dir() == tmp_path / "pwa_template"
+
+
+def test_each_build_versions_worker_and_media_together(tmp_path, template, episode):
+    (template / "sw.js").write_text("const CACHE_VERSION = '__BUILD_ID__';", encoding="utf-8")
+    builds = []
+    for name in ("one", "two"):
+        output = build_app(template, tmp_path / name, episode)
+        metadata = json.loads((output / "episode.json").read_text(encoding="utf-8"))
+        build_id = metadata["buildId"]
+        assert build_id in (output / "sw.js").read_text(encoding="utf-8")
+        assert metadata["audio"].endswith(f"?v={build_id}")
+        assert metadata["cover"].endswith(f"?v={build_id}")
+        builds.append(build_id)
+    assert builds[0] != builds[1]
+    assert "__BUILD_ID__" in (template / "sw.js").read_text(encoding="utf-8")
+
+
+def test_builder_excludes_deployment_and_node_directories(tmp_path, template, episode):
+    for name in (".vercel", "node_modules"):
+        (template / name).mkdir()
+        (template / name / "private.json").write_text("private")
+    output = build_app(template, tmp_path / "app", episode)
+    assert not (output / ".vercel").exists()
+    assert not (output / "node_modules").exists()
