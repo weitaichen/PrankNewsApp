@@ -156,8 +156,9 @@ def _show_cover(title: str, template: Path, destination: Path) -> None:
     cover.resize((512, 512), Image.Resampling.LANCZOS).save(destination.parent / "cover.png", format="PNG")
 
 
-def build_show_site(show_dir: str | Path, template_dir: str | Path,
-                    out_dir: str | Path, base_url: str) -> Path:
+def validate_show_build(show_dir: str | Path, template_dir: str | Path,
+                        out_dir: str | Path, base_url: str) -> tuple[Path, Path]:
+    """Run path/template checks before copying a candidate into the library."""
     template, output = _build_paths(template_dir, out_dir)
     directory = Path(show_dir).resolve()
     if directory.is_relative_to(output) or output.is_relative_to(directory):
@@ -167,8 +168,19 @@ def build_show_site(show_dir: str | Path, template_dir: str | Path,
             or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
         raise ValueError("節目網址必須是 https 絕對網址，且不可含路徑或查詢。")
     base_url = base_url.rstrip("/")
+    for name in ("index.html", "sw.js", "manifest.webmanifest", "cover.png"):
+        if not (template / name).is_file():
+            raise FileNotFoundError(f"找不到 PWA 範本檔案：{template / name}")
+    return template, output
+
+
+def build_show_site(show_dir: str | Path, template_dir: str | Path,
+                    out_dir: str | Path, base_url: str, *, episodes: list[dict] | None = None) -> Path:
+    template, output = validate_show_build(show_dir, template_dir, out_dir, base_url)
+    directory = Path(show_dir).resolve()
+    base_url = base_url.rstrip("/")
     show = load_show(directory.name, root_dir=directory.parent)
-    episodes = show.episodes
+    episodes = show.episodes if episodes is None else episodes
     if not episodes:
         raise ValueError("節目尚無單集，請先產生語音。")
     latest = episodes[0]

@@ -57,7 +57,7 @@ def test_build_without_deploy(monkeypatch, tmp_path, template, episode):
 def test_build_deploy_and_qr(monkeypatch, tmp_path, template, episode):
     calls = []
 
-    def deploy(directory, name):
+    def deploy(directory, name, **kwargs):
         calls.append((directory, name))
         return "https://prank-news.vercel.app"
 
@@ -75,7 +75,7 @@ def test_build_deploy_and_qr(monkeypatch, tmp_path, template, episode):
 
 def test_core_default_project_is_neutral(monkeypatch, tmp_path, template, episode):
     names = []
-    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, name: names.append(name) or f"https://{name}.vercel.app")
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, name, **kwargs: names.append(name) or f"https://{name}.vercel.app")
     result = pipeline.build_and_deploy(episode, tmp_path / "app", template_dir=template)
     assert re.fullmatch(r"morning-news-[a-z0-9]{6}", names[0])
     assert "prank" not in result["url"]
@@ -130,7 +130,7 @@ def test_generate_to_fixed_show_and_qr_encodes_player_url(monkeypatch, tmp_path,
         return 3
     monkeypatch.setattr(pipeline, "generate_script", generate)
     monkeypatch.setattr(pipeline, "synthesize", tts)
-    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, project: seen.append(project) or f"https://{project}.vercel.app")
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, project, **kwargs: seen.append(project) or f"https://{project}.vercel.app")
     monkeypatch.setattr(pipeline, "make_qr", lambda url, path: seen.append(url) or path)
     result = pipeline.generate_and_deploy(request_data, show, tmp_path / "work", tmp_path / "app", template_dir=template)
     assert seen == [show.project, "https://morning-news-fixed.vercel.app"]

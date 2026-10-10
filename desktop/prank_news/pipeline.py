@@ -3,14 +3,16 @@
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
-from .builder import build_show_site, default_template_dir
-from .deploy import deploy as deploy_app, make_qr
+from .builder import build_show_site, default_template_dir, validate_show_build
+from .deploy import DeploymentError, deploy as deploy_app, make_qr
 from .models import Episode, NewsRequest
 from .project import default_project_name
 from .script_gen import DEFAULT_SHOW, DEFAULT_ANCHOR, generate_script, parse_response
 from .tts import synthesize
-from .show import (Show, add_episode, create_show, list_shows, load_show,
+from .show import (Show, candidate_episode, show_lock, save_base_url,
+                   create_show, list_shows, load_show, contains_passenger,
                    validate_show_privacy, safe_metadata, DEFAULT_DESCRIPTION)
 
 Progress = Callable[[str, str], None]
@@ -136,22 +138,54 @@ def build_and_deploy(
                                    root_dir=shows_root, passenger_names=episode.passenger_names)
         else:
             show = recent_or_default_show(episode.passenger_names, root_dir=shows_root)
-    validate_show_privacy(show, episode.passenger_names)
-    base_url = f"https://{show.project}.vercel.app"
-    item = add_episode(show, episode.audio_path, episode.duration_sec, passenger_names=episode.passenger_names)
-    output = build_show_site(show.directory,
-                             template_dir if template_dir is not None else default_template_dir(),
-                             out_dir, base_url)
-    episode.show, episode.anchor, episode.title = show.title, show.anchor, item["title"]
-    episode.audio_path = output / item["file"]
-    url = None
-    qr = None
-    if deploy:
-        progress("deploy", "正在部署至 Vercel…")
-        url = deploy_app(output, show.project)
-        qr = make_qr(url, output / "qr.png")
+    template = template_dir if template_dir is not None else default_template_dir()
+    with show_lock(show):
+        show = load_show(show.project, root_dir=show.directory.parent)
+        validate_show_privacy(show, episode.passenger_names)
+        base_url = show.base_url
+        validate_show_build(show.directory, template, out_dir, base_url)
+        with candidate_episode(show, episode.audio_path, episode.duration_sec,
+                               passenger_names=episode.passenger_names) as (item, retained):
+            output = build_show_site(show.directory, template, out_dir, base_url, episodes=retained)
+        # The library is committed once the build succeeds. Deployment failures
+        # keep the new episode and built output so the user can redeploy it.
+        episode.show, episode.anchor, episode.title = show.title, show.anchor, item["title"]
+        episode.audio_path = output / item["file"]
+        url = None
+        qr = None
+        if deploy:
+            progress("deploy", "正在部署至 Vercel…")
+            url = _deploy_show_locked(show, output, template, retained, episode.passenger_names)
+            base_url = url
+            qr = make_qr(url, output / "qr.png")
     progress("done", "新聞 App 已完成。")
     return {"out_dir": output, "url": url, "feed_url": f"{base_url}/feed.xml", "qr_path": qr}
+
+
+def _deploy_show_locked(show: Show, output: Path, template, episodes: list[dict],
+                        passenger_names: list[str]) -> str:
+    def rebuild(base_url):
+        validate_show_build(show.directory, template, output, base_url)
+        if contains_passenger(base_url, passenger_names):
+            raise ValueError("公開網址含乘客名字，請調整 production alias。")
+        save_base_url(show, base_url)
+        build_show_site(show.directory, template, output, base_url, episodes=episodes)
+
+    url = deploy_app(output, show.project, rebuild_for_url=rebuild)
+    save_base_url(show, url)
+    return url
+
+
+def deploy_built_show(show: Show, out_dir: str | Path, *, template_dir=None) -> str:
+    """GUI redeployment shares URL reconciliation without adding another episode."""
+    output = Path(out_dir).resolve()
+    with show_lock(show):
+        show = load_show(show.project, root_dir=show.directory.parent)
+        episodes = show.episodes
+        guid = ET.parse(output / "feed.xml").findtext("channel/item/guid")
+        if not episodes or guid != episodes[0]["id"]:
+            raise DeploymentError("節目已有新單集，請重新建置後部署。")
+        return _deploy_show_locked(show, output, template_dir or default_template_dir(), episodes, [])
 
 
 def recent_or_default_show(passenger_names: list[str], *, root_dir=None) -> Show:

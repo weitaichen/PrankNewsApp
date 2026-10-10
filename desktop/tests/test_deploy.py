@@ -147,7 +147,7 @@ def test_anonymous_episode_get_validates_json_and_redirect(monkeypatch, status, 
     def opener(request, **kwargs):
         assert request.get_method() == "GET"
         if request.full_url.endswith("/feed.xml"):
-            rss = Response(b'<rss version="2.0"><channel/></rss>')
+            rss = Response(b'<rss version="2.0"><channel><item><guid>latest</guid><enclosure url="https://news.vercel.app/episodes/latest.mp3?v=build"/></item></channel></rss>')
             rss.status = 200
             rss.geturl = lambda: request.full_url
             return rss
@@ -184,7 +184,7 @@ def test_public_check_three_endpoints_and_deployment_retry(monkeypatch, tmp_path
         assert not any(key.lower() in {"authorization", "cookie"} for key in request.headers)
         calls.append((url, request.get_header("Range")))
         if url.endswith("feed.xml"):
-            return Response(b"invalid" if failure == "rss-xml" else b'<rss version="2.0"><channel/></rss>',
+            return Response(b"invalid" if failure == "rss-xml" else b'<rss version="2.0"><channel><item><guid>latest</guid><enclosure url="https://morning-news.vercel.app/episodes/latest.mp3?v=build"/></item></channel></rss>',
                             403 if failure == "rss-status" else 200, url)
         if url.endswith("episode.json"):
             return Response(b'{"audio":"episodes/latest.mp3?v=build"}',
