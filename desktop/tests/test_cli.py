@@ -45,7 +45,7 @@ def test_cli_default_project_uses_core_generator(monkeypatch, tmp_path, template
         path.write_bytes(b"audio")
         return 1
     monkeypatch.setattr(pipeline, "synthesize", tts)
-    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, name: names.append(name) or f"https://{name}.vercel.app")
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, name, **kwargs: names.append(name) or f"https://{name}.vercel.app")
     script = tmp_path / "script.txt"
     script.write_text("早安。", encoding="utf-8")
     assert cli.main(["--name", "王小明", "--script-file", str(script), "--deploy",
@@ -83,7 +83,7 @@ def test_cli_new_existing_and_recent_show_keep_project(monkeypatch, tmp_path, te
     monkeypatch.setattr(pipeline, "synthesize", tts)
     monkeypatch.setattr(pipeline, "generate_script", lambda *args: pytest.fail("script-file must skip Claude"))
     projects = []
-    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, project: projects.append(project) or f"https://{project}.vercel.app")
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, project, **kwargs: projects.append(project) or f"https://{project}.vercel.app")
     script = tmp_path / "script.txt"
     script.write_text("節目：小明專屬\n主播：王小明\n\n王小明早安。", encoding="utf-8")
     common = ["--name", "王小明", "--script-file", str(script), "--template", str(template), "--deploy"]

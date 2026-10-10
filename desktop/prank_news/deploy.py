@@ -7,7 +7,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit, urljoin
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -31,8 +31,13 @@ def _deployment_url(output: str, project_name: str) -> str:
     return f"https://{project_name}.vercel.app"
 
 
-def check_public_episode(url: str, *, checker: Callable | None = None) -> None:
-    """Anonymous RSS/JSON GETs and a two-byte range GET of the latest audio."""
+def check_public_episode(url: str, *, checker: Callable | None = None,
+                         expected_guid: str | None = None, feed_only: bool = False) -> None:
+    """Check the actual RSS enclosure and this build's GUID without credentials.
+
+    feed_only is a preliminary alias check before rebuilding URLs. The final
+    check must include JSON and Range before delivering any subscription URL.
+    """
     check = checker or urlopen
     def verify_response(response, status):
         host = (urlsplit(response.geturl()).hostname or "").lower()
@@ -48,23 +53,38 @@ def check_public_episode(url: str, *, checker: Callable | None = None) -> None:
             raise ValueError("feed.xml 不是有效 XML。") from exc
         if b"<rss" not in body or feed.tag != "rss":
             raise ValueError("feed.xml 必須是 RSS。")
+        latest = feed.find("channel/item")
+        guid = latest.findtext("guid") if latest is not None else None
+        if not guid or (expected_guid is not None and guid != expected_guid):
+            raise ValueError("RSS 最新 GUID 與本次本機單集不符，可能仍是舊部署或快取。")
+        enclosure = latest.find("enclosure")
+        audio_url = enclosure.get("url", "") if enclosure is not None else ""
+        parsed = urlsplit(audio_url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("RSS 最新 enclosure 必須是完整的 https 音檔網址。")
+    if feed_only:
+        return
     request = Request(url.rstrip("/") + "/episode.json", headers={"Accept": "application/json"})
     with check(request, timeout=20) as response:
         verify_response(response, 200)
         metadata = json.load(response)
         if not isinstance(metadata, dict):
             raise ValueError("episode.json 必須是 JSON 物件。")
+        if expected_guid is not None and (
+            metadata.get("buildId") != expected_guid
+            or metadata.get("feedUrl") != url.rstrip("/") + "/feed.xml"
+        ):
+            raise ValueError("播放器仍指向舊單集或舊訂閱網址，請等待部署更新後重試。")
     audio = metadata.get("audio")
     if not isinstance(audio, str) or not audio.strip():
         raise ValueError("episode.json 缺少最新音檔。")
-    audio_url = urljoin(url.rstrip("/") + "/", audio)
-    parsed = urlsplit(audio_url)
     if parsed.scheme != "https" or parsed.netloc != urlsplit(url).netloc:
-        raise ValueError("音檔必須是同源 https 網址。")
+        raise ValueError("RSS enclosure 必須是同源 https 網址。")
     request = Request(audio_url, headers={"Range": "bytes=0-1", "Accept": "audio/mpeg"})
     with check(request, timeout=20) as response:
         verify_response(response, 206)
-        response.read(2)
+        if len(response.read(2)) != 2:
+            raise ValueError("RSS enclosure 的 Range 回應缺少音檔資料。")
 
 
 def _remove_mismatched_link(directory: Path, project_name: str) -> None:
@@ -118,6 +138,7 @@ def deploy(
     out_dir: str | Path, project_name: str, runner: Callable | None = None,
     *, public_check: Callable | None = None, attempts: int = 3,
     retry_delay: float = 2, sleeper: Callable = time.sleep,
+    rebuild_for_url: Callable[[str], None] | None = None,
 ) -> str:
     directory = Path(out_dir).resolve()
     if not directory.is_dir():
@@ -147,21 +168,58 @@ def deploy(
         [executable, "--yes", "vercel", "link", "--yes", "--project", project_name],
         [executable, "--yes", "vercel", "deploy", "--prod", "--yes"],
     ]
-    for command in commands:
-        completed = _run_vercel(command, directory, runner or subprocess.run)
-    url = _deployment_url(f"{completed.stdout}\n{completed.stderr}", project_name)
-    for attempt in range(attempts):
-        try:
-            (public_check or check_public_episode)(url)
-            return url
-        except (OSError, ValueError) as exc:
-            if attempt == attempts - 1:
-                raise DeploymentError(
-                    "無法匿名讀取 feed.xml、episode.json 或音檔 Range；網址受 Vercel 部署保護，請到專案 "
-                    "Settings → Deployment Protection 關閉 Vercel Authentication。"
-                    "若已關閉，請確認網路與 alias 已生效後重試。"
-                ) from exc
-            sleeper(retry_delay)
+    local_feed = directory / "feed.xml"
+    expected_guid = None
+    built_url = None
+    if local_feed.exists():
+        feed = ET.parse(local_feed)
+        expected_guid = feed.findtext("channel/item/guid")
+        built_url = (feed.findtext("channel/link") or "").rstrip("/")
+        if not expected_guid:
+            raise DeploymentError("本機 RSS 缺少最新單集 GUID，請重新建置。")
+
+    def verify(url, *, feed_only=False):
+        for attempt in range(attempts):
+            try:
+                if public_check is not None:
+                    public_check(url)
+                else:
+                    check_public_episode(url, expected_guid=expected_guid, feed_only=feed_only)
+                return
+            except (OSError, ValueError) as exc:
+                if attempt == attempts - 1:
+                    raise DeploymentError(
+                        "無法匿名讀取本次最新 GUID 的 feed.xml、episode.json 或 RSS enclosure 音檔 Range；"
+                        "可能是舊部署、快取或 Vercel 部署保護，請至專案 "
+                        "Settings → Deployment Protection 關閉 Vercel Authentication。"
+                        "若已關閉，請確認網路與 alias 已生效後重試。"
+                    ) from exc
+                sleeper(retry_delay)
+
+    _run_vercel(commands[0], directory, runner or subprocess.run)
+    if expected_guid is None and public_check is None:
+        raise DeploymentError("找不到本機 feed.xml，請先建置節目。")
+    for deployment in range(2):
+        completed = _run_vercel(commands[1], directory, runner or subprocess.run)
+        url = _deployment_url(f"{completed.stdout}\n{completed.stderr}", project_name).rstrip("/")
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+                or parsed.path or parsed.query or parsed.fragment):
+            raise DeploymentError("部署回傳的 production alias 不是有效的 https 網站網址。")
+        if rebuild_for_url is not None and url != built_url:
+            if deployment:
+                raise DeploymentError("重新部署後公開網址再次改變，請確認 production alias 後重試。")
+            # Check the new alias's feed/GUID before persisting it. Old enclosure
+            # URLs may be unreachable until the corrected build is deployed.
+            verify(url, feed_only=True)
+            rebuild_for_url(url)
+            built_url = url
+            # Rebuilding replaces the output, including .vercel/project.json.
+            # Explicitly relink so the second deploy cannot infer another project.
+            _run_vercel(commands[0], directory, runner or subprocess.run)
+            continue
+        verify(url)
+        return url
 
 
 def make_qr(url: str, png_path: str | Path) -> Path:

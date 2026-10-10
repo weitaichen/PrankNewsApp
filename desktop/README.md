@@ -22,7 +22,7 @@ python -m venv .venv
 1. 頂部「節目」下拉選單可選既有節目。首次啟動會引導建立；「新增節目…」可填節目名、主播名，專案名自動產生，也可修改。專案名使用 1–100 個小寫英文字母、數字或中間連字號，禁止 `---`。節目與主播名不可含乘客名字或去姓後的兩字以上片段；新增及產稿／建置前都會檢查。
 2. 填乘客名字（逗號或頓號分隔）、分鐘、內容梗與主播聲音。按「一、產生新聞稿」後可編輯稿子，也可直接貼上稿子跳過 Claude。節目與主播名取自節目設定；開場要求「歡迎收聽〈節目名〉，我是〈主播名〉」。字數包含標點、不計空白，預估每分鐘 250 字。
 3. 按「二、產生語音並建立 App」，加入節目庫的新一集並重建完整 feed 與播放器。每次建置會新增單集；「試聽」「開啟資料夾」照常可用。輸出預設在 `%USERPROFILE%\Documents\PrankNews\<時間戳>`，可選其他父資料夾。修改稿子、乘客名、聲音或切換節目後須重新建置。
-4. 確認試聽後按「三、部署到手機」。每次部署到所選節目的固定專案。匿名檢查 `feed.xml`（200、有效 RSS XML）、`episode.json`（200 JSON）與最新 MP3 的 `Range: bytes=0-1`（206）；重試後仍失敗會提示至 Settings → Deployment Protection 關閉 Vercel Authentication，再確認網路與 alias 生效後重試。成功才顯示播放器網址、QR 與可複製的訂閱網址。
+4. 確認試聽後按「三、部署到手機」。每次部署到所選節目的固定專案。匿名檢查 `feed.xml`（200、有效 RSS XML、最新 GUID 等於本次本機單集）、`episode.json`（200 JSON）與 RSS 最新 enclosure 網址的 `Range: bytes=0-1`（206）；重試後仍失敗會提示至 Settings → Deployment Protection 關閉 Vercel Authentication，再確認網路與 alias 生效後重試。成功才顯示播放器網址、QR 與可複製的訂閱網址。
 
 第一次：iPhone 掃 QR → 按「在 Podcast 收聽」訂閱。之後新的一集會自動出現在 Podcasts App（可在節目頁下拉重新整理）。車上：接上 CarPlay → Podcasts → 本節目。
 
@@ -32,11 +32,15 @@ python -m venv .venv
 
 ## 節目庫與部署內容
 
-節目庫位於 `%USERPROFILE%\Documents\PrankNews\shows\<project>\`，與每次建置輸出分開。`show.json` 只存專案、節目名、主播名、中性說明與建立時間；`episodes.json` 只存單集 ID、中性標題、含時區發布時間、秒數、MP3 相對路徑與位元組數。乘客名單與稿子不寫入這些資料或公開 JSON／RSS，也不作為檔名。MP3 本身是包含乘客名字的播報內容。
+節目庫位於 `%USERPROFILE%\Documents\PrankNews\shows\<project>\`，與每次建置輸出分開。`show.json` 存專案、節目名、主播名、中性說明、建立時間與部署後的 `baseUrl`；`episodes.json` 只存單集 ID、中性標題、含時區發布時間、秒數、MP3 相對路徑與位元組數。乘客名單與稿子不寫入這些資料或公開 JSON／RSS，也不作為檔名。MP3 本身是包含乘客名字的播報內容。
 
 單集使用「10月10日 晨間新聞」等中性標題，同日第二集為「10月10日 晨間新聞（二）」，依序增加。新的在前，最多保留 20 集；超出的舊單集及本機 MP3 一起刪除，下次部署也不再包含舊檔。`.last-show` 只保存最近使用的專案名稱。
 
-部署網址為 `https://<project>.vercel.app`，訂閱網址為 `/feed.xml`。RSS 2.0 包含 iTunes／content namespace、絕對 HTTPS enclosure、位元組長度、唯一 GUID 與 RFC 2822 日期。`itunes:block=Yes` 避免被收錄至 Apple 目錄；feed 與音檔仍可由持有網址的人匿名存取。
+建置先驗證輸出位置、必要範本及隱私，再複製候選 MP3，以候選索引建站。成功後才原子提交 `episodes.json` 並淘汰超額舊音檔；建站失敗會移除候選 MP3，保留原索引及所有原音檔。**部署失敗時保留已建置成功的新集與本機輸出**，可直接再按部署，不必新增另一集。
+
+每個節目的 `.lock` 使用作業系統跨程序檔案鎖，涵蓋重讀索引、單集配發、複製、建站、提交、淘汰與部署網址校正。等候 10 秒仍拿不到鎖會提示「另一個視窗正在製作這個節目」。程序終止後系統自動釋放鎖；`.lock` 保留在磁碟上，不需刪除。JSON 暫存檔每次使用唯一名稱。另一視窗已新增單集時，舊輸出會被拒絕部署，請先重新建置。
+
+首次建置暫用 `https://<project>.vercel.app`。部署取得 production alias 後，先匿名確認該地址的 RSS 與本次 GUID；若與建置網址不同，保存至 `show.json.baseUrl`，以此網址重建並再部署一次（最多一次）。最終 RSS、PWA `feedUrl`、GUI 訂閱網址共用通過完整匿名檢查的 alias；之後建置讀取保存的網址。訂閱網址為該地址加 `/feed.xml`。RSS 2.0 包含 iTunes／content namespace、絕對 HTTPS enclosure、位元組長度、唯一 GUID 與 RFC 2822 日期。`itunes:block=Yes` 避免被收錄至 Apple 目錄；feed 與音檔仍可由持有網址的人匿名存取。
 
 封面為 1400×1400 RGB PNG，依序嘗試系統 `msjhbd.ttc`、`msjh.ttc`、`mingliu.ttc`，以深色背景畫節目名。沒有可用字型時放大範本封面；另產出 PWA 的 512×512 `cover.png`。系統字型不打包。部署包含保留的所有 `episodes/<id>.mp3`；PWA `episode.json` 指向最新一集並帶 `feedUrl`。SW 版本與素材 URL 同用單集 ID，新版本完整快取後才接管，支援 `episodes/` 路徑的離線 Range。
 
@@ -74,7 +78,7 @@ result = generate_and_deploy(request, show, "output/work", "output/app",
 
 `root_dir` 可注入 `create_show`／`load_show`／`list_shows` 作為節目庫根目錄。`add_episode(show, mp3_path, duration_sec)` 加單集；可注入含時區的 `when` 與私人 `passenger_names`，後者只用於檢查、不儲存。`builder.build_show_site(show_dir, template_dir, out_dir, base_url)` 產生部署內容。
 
-GUI 分步呼叫 `generate_script(request)`、`synthesize_episode(...)`、`build_and_deploy(..., show=show, deploy=False)`，第三步只部署已建內容。`generate_and_deploy` 串接完整流程。回傳包含 `out_dir: Path`、`url: str | None`、`feed_url: str`、`qr_path: Path | None`；未部署時 `url`／`qr_path` 是 `None`。進度 callback 接收 `(stage, message)`：產生為 `script → tts → done`，建置為 `build → deploy（選用） → done`。
+GUI 分步呼叫 `generate_script(request)`、`synthesize_episode(...)`、`build_and_deploy(..., show=show, deploy=False)`，第三步以 `deploy_built_show(show, out_dir)` 部署已建內容，必要時校正網址重建，不新增單集。`generate_and_deploy` 串接完整流程。回傳包含 `out_dir: Path`、`url: str | None`、`feed_url: str`、`qr_path: Path | None`；未部署時 `url`／`qr_path` 是 `None`，`feed_url` 為保存的網址或尚未驗證的初始網址。進度 callback 接收 `(stage, message)`：產生為 `script → tts → done`，建置為 `build → deploy（選用） → done`。
 
 這些 API 同步阻塞，適合 GUI 工作執行緒；不要在已有 asyncio 事件迴圈的同一執行緒呼叫語音合成。建置拒絕會覆蓋程式、範本或節目庫的輸出目錄。
 

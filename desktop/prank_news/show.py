@@ -1,6 +1,7 @@
 """Local show library. Only neutral metadata and audio belong in this directory."""
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import math
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import time
 from uuid import uuid4
 
 from .project import default_project_name, validate_project_name
@@ -16,6 +18,39 @@ DEFAULT_SHOW = "晨間新聞快報"
 DEFAULT_ANCHOR = "主播 林雅婷"
 DEFAULT_DESCRIPTION = "每日晨間新聞，快速掌握今日大小事。"
 MAX_EPISODES = 20
+LOCK_TIMEOUT = 10.0
+
+
+@contextmanager
+def show_lock(show: "Show", *, timeout: float | None = None):
+    """OS-owned file lock: released even if the process crashes. Never unlink it."""
+    deadline = time.monotonic() + (LOCK_TIMEOUT if timeout is None else timeout)
+    with (show.directory / ".lock").open("a+b") as handle:
+        if handle.seek(0, os.SEEK_END) == 0:
+            handle.write(b"\0")
+            handle.flush()
+        while True:
+            handle.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("另一個視窗正在製作這個節目，請稍後重試。") from None
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def default_shows_root() -> Path:
@@ -43,9 +78,12 @@ def safe_metadata(value: str, fallback: str, names: list[str], neutral: str) -> 
 
 
 def _write_json(path: Path, data) -> None:
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -56,6 +94,11 @@ class Show:
     description: str
     created: str
     directory: Path
+    baseUrl: str | None = None
+
+    @property
+    def base_url(self) -> str:
+        return self.baseUrl or f"https://{self.project}.vercel.app"
 
     @property
     def episodes(self) -> list[dict]:
@@ -107,8 +150,15 @@ def mark_used(show: Show) -> None:
     (show.directory.parent / ".last-show").write_text(show.project, encoding="utf-8")
 
 
+def save_base_url(show: Show, base_url: str) -> None:
+    """Caller holds show_lock and has anonymously verified this alias's feed."""
+    data = json.loads((show.directory / "show.json").read_text(encoding="utf-8"))
+    data["baseUrl"] = base_url.rstrip("/")
+    _write_json(show.directory / "show.json", data)
+
+
 def validate_show_privacy(show: Show, passenger_names: list[str]) -> None:
-    values = [show.project, show.title, show.anchor, show.description, show.created]
+    values = [show.project, show.title, show.anchor, show.description, show.created, show.base_url]
     values.extend(json.dumps(item, ensure_ascii=False) for item in show.episodes)
     if any(contains_passenger(value, passenger_names) for value in values):
         raise ValueError("節目資料含乘客名字或去姓片段，請選擇或建立中性節目。")
@@ -136,6 +186,18 @@ def _episode_number(title: str) -> int:
 
 def add_episode(show: Show, mp3_path: str | Path, duration_sec: float,
                 *, when: datetime | None = None, passenger_names: list[str] | None = None) -> dict:
+    with show_lock(show):
+        # Always reload after acquiring the cross-process lock.
+        current = load_show(show.project, root_dir=show.directory.parent)
+        with candidate_episode(current, mp3_path, duration_sec, when=when,
+                               passenger_names=passenger_names) as (episode, retained):
+            return episode
+
+
+@contextmanager
+def candidate_episode(show: Show, mp3_path: str | Path, duration_sec: float,
+                      *, when: datetime | None = None, passenger_names: list[str] | None = None):
+    """Caller holds show_lock. Commit only after the candidate has built successfully."""
     if isinstance(duration_sec, bool) or not math.isfinite(duration_sec) or duration_sec <= 0:
         raise ValueError("音檔長度必須是正數。")
     names = passenger_names or []
@@ -162,15 +224,24 @@ def add_episode(show: Show, mp3_path: str | Path, duration_sec: float,
     else:
         raise ValueError("無法產生不含乘客名字的單集 ID，請調整乘客名字。")
     destination = show.directory / file
-    shutil.copy2(mp3_path, destination)
-    episode = dict(id=build_id, title=title, published=published.isoformat(),
-                   durationSec=round(duration_sec, 3), file=file, bytes=destination.stat().st_size)
-    retained = [episode, *episodes][:MAX_EPISODES]
-    _write_json(show.directory / "episodes.json", retained)
+    obsolete = []
     for old in episodes[MAX_EPISODES - 1:]:
         path = (show.directory / old["file"]).resolve()
         if path.parent != (show.directory / "episodes").resolve():
             raise ValueError("單集檔案路徑必須位於節目的 episodes 資料夾。")
-        path.unlink(missing_ok=True)
-    mark_used(show)
-    return episode
+        obsolete.append(path)
+    committed = False
+    try:
+        shutil.copy2(mp3_path, destination)
+        episode = dict(id=build_id, title=title, published=published.isoformat(),
+                       durationSec=round(duration_sec, 3), file=file, bytes=destination.stat().st_size)
+        retained = [episode, *episodes][:MAX_EPISODES]
+        yield episode, retained
+        _write_json(show.directory / "episodes.json", retained)
+        committed = True
+        for path in obsolete:
+            path.unlink(missing_ok=True)
+        mark_used(show)
+    finally:
+        if not committed:
+            destination.unlink(missing_ok=True)

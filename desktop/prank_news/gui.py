@@ -15,10 +15,10 @@ from collections.abc import Callable
 
 from PIL import Image, ImageTk
 
-from .deploy import DeploymentError, deploy, make_qr
+from .deploy import DeploymentError, make_qr
 from .models import Episode, NewsRequest
 from .project import default_project_name, validate_project_name
-from .pipeline import build_and_deploy, synthesize_episode
+from .pipeline import build_and_deploy, deploy_built_show, synthesize_episode
 from .script_gen import ScriptGenerationError, generate_script
 from .tts import SynthesisError
 from .show import (create_show, list_shows, mark_used, validate_show_privacy,
@@ -460,13 +460,14 @@ class PrankNewsWindow:
             self._validation_error(exc)
             return
         output = self.out_dir
+        selected_show = self.selected_show
         if output is None:
             return
         self._clear_deployment()
 
         def job():
             self._progress("deploy", "正在部署至 Vercel…")
-            url = deploy(output, project)
+            url = deploy_built_show(selected_show, output)
             self._progress("qr", "正在產生 QR code…")
             qr_path = make_qr(url, output / "qr.png")
             self._progress("done", "部署已完成。")
@@ -475,7 +476,7 @@ class PrankNewsWindow:
         def completed(result):
             url, qr_path = result
             self.url.set(url)
-            self.feed_url.set(f"https://{project}.vercel.app/feed.xml")
+            self.feed_url.set(f"{url}/feed.xml")
             with Image.open(qr_path) as source:
                 qr = source.convert("RGB").resize((150, 150), Image.Resampling.NEAREST)
             self.qr_image = ImageTk.PhotoImage(qr, master=self.root)
