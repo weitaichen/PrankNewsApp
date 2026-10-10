@@ -18,6 +18,40 @@ def _no_progress(stage: str, message: str) -> None:
     pass
 
 
+def synthesize_episode(
+    show: str,
+    anchor: str,
+    script: str,
+    voice: str,
+    work_dir: str | Path,
+    progress: Progress = _no_progress,
+) -> Episode:
+    """Synthesize an edited script verbatim, without Claude or metadata parsing."""
+    if not script.strip():
+        raise ValueError("播報稿不可空白。")
+    if not show.strip() or not anchor.strip():
+        raise ValueError("節目名與主播名不可空白。")
+    if not voice.strip():
+        raise ValueError("主播聲音不可空白。")
+    directory = Path(work_dir).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    progress("tts", "正在合成語音…")
+    audio = directory / "episode.mp3"
+    duration = synthesize(script, audio, voice)
+    today = date.today()
+    episode = Episode(
+        show=show.strip(),
+        title=f"{today.year}年{today.month}月{today.day}日 晨間新聞",
+        anchor=anchor.strip(),
+        published=today.isoformat(),
+        duration_sec=duration,
+        script=script,
+        audio_path=audio,
+    )
+    progress("done", "語音已完成。")
+    return episode
+
+
 def generate_episode(
     request: NewsRequest,
     work_dir: str | Path,
