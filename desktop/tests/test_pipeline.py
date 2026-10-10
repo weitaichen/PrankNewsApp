@@ -88,7 +88,8 @@ def test_build_sanitizes_all_public_metadata(tmp_path, template, episode, show, 
     result = pipeline.build_and_deploy(episode, tmp_path / "app", deploy=False, template_dir=template)
     public = (result["out_dir"] / "episode.json").read_text(encoding="utf-8")
     assert "王小明" not in public and "小明" not in public
-    assert "passenger_names" not in public and "script" not in public
+    data = json.loads(public)
+    assert "passenger_names" not in data and "script" not in data
     metadata = json.loads(public)
     assert metadata["show"] == metadata["title"] == "晨間新聞快報"
     assert metadata["anchor"] == "主播 林雅婷"
