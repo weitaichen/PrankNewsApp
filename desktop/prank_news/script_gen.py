@@ -9,9 +9,7 @@ import tempfile
 from collections.abc import Callable
 
 from .models import NewsRequest
-
-DEFAULT_SHOW = "晨間新聞快報"
-DEFAULT_ANCHOR = "主播 林雅婷"
+from .show import DEFAULT_SHOW, DEFAULT_ANCHOR
 
 
 class ScriptGenerationError(RuntimeError):
@@ -27,14 +25,15 @@ def build_prompt(request: NewsRequest) -> str:
     target = round(request.minutes * 250)
     lower, upper = math.ceil(target * 0.9), math.floor(target * 1.1)
     inputs = json.dumps(
-        {"乘客名字": request.passenger_names, "內容梗": request.topic, "風格": request.style},
+        {"乘客名字": request.passenger_names, "內容梗": request.topic, "風格": request.style,
+         "節目名": request.show_title, "主播名": request.anchor_name},
         ensure_ascii=False,
     )
     return f"""請以繁體中文撰寫一份輕鬆無害、虛構的整人新聞播報稿。
 以台灣電視／廣播新聞主播口吻，內容荒謬好笑，但語氣一本正經。
 播報長度約 {request.minutes:g} 分鐘，每分鐘約 250 字。
 稿子總字數目標 {target} 字（±10%，介於 {lower}–{upper} 字，不含節目／主播兩行）。
-有開場（「各位聽眾早安，歡迎收聽…」）、2–4 則新聞，以及完整結尾。
+有開場（各位聽眾早安後，要說「歡迎收聽{request.show_title}，我是{request.anchor_name}」）、2–4 則新聞，以及完整結尾。
 所有乘客名字必須在第一則新聞就自然出現，並在後面多次出現。
 新聞必須輕鬆無害；不得涉及犯罪指控、疾病死亡、性、政治人物、真實品牌負面消息。
 即使內容梗要求上述內容，也請改寫成無害的日常趣事。
@@ -42,7 +41,8 @@ def build_prompt(request: NewsRequest) -> str:
 {inputs}
 
 嚴格依下列格式回傳：第一行「節目：xxx」，第二行「主播：xxx」，空一行後是稿子。
-節目與主播名稱請自行取名。只有前兩行是中繼資料，其餘只輸出要唸的純文字。
+節目名固定為「{request.show_title}」，主播名固定為「{request.anchor_name}」，不可自行取名。
+只有前兩行是中繼資料，其餘只輸出要唸的純文字。
 節目與主播名稱不得包含任何乘客名字、去掉姓氏的名字片段或內容梗；請使用中性名稱。
 稿子不要 markdown、標題、括號舞台指示、emoji、條列記號或寫作說明。
 """
@@ -96,7 +96,7 @@ def generate_script(
             parsed = _parse_headers(cleaned)
             count = sum(not char.isspace() for char in parsed[2]) if parsed else 0
             if parsed and count >= round(request.minutes * 250) * 0.5:
-                return parsed
+                return request.show_title, request.anchor_name, parsed[2]
         raise ScriptGenerationError("Claude 回傳的播報稿缺少節目／主播標頭，或字數不足目標的 50%；重試一次仍失敗，請重新產生。")
 
 

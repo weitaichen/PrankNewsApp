@@ -4,12 +4,14 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from .builder import build_app, default_template_dir
+from .builder import build_show_site, default_template_dir
 from .deploy import deploy as deploy_app, make_qr
 from .models import Episode, NewsRequest
 from .project import default_project_name
 from .script_gen import DEFAULT_SHOW, DEFAULT_ANCHOR, generate_script, parse_response
 from .tts import synthesize
+from .show import (Show, add_episode, create_show, list_shows, load_show,
+                   validate_show_privacy, safe_metadata, DEFAULT_DESCRIPTION)
 
 Progress = Callable[[str, str], None]
 
@@ -87,9 +89,9 @@ def generate_episode(
     directory.mkdir(parents=True, exist_ok=True)
     progress("script", "正在產生新聞播報稿…" if script_text is None else "正在讀取指定播報稿…")
     if script_text is None:
-        show, anchor, script = generate_script(request)
+        _, _, script = generate_script(request)
     else:
-        show, anchor, script = parse_response(script_text)
+        _, _, script = parse_response(script_text)
     if not script.strip():
         raise ValueError("播報稿不可空白。")
     progress("tts", "正在合成語音…")
@@ -97,9 +99,9 @@ def generate_episode(
     duration = synthesize(script, audio, request.voice)
     today = date.today()
     episode = Episode(
-        show=show,
+        show=request.show_title,
         title=f"{today.year}年{today.month}月{today.day}日 晨間新聞",
-        anchor=anchor,
+        anchor=request.anchor_name,
         published=today.isoformat(),
         duration_sec=duration,
         script=script,
@@ -119,22 +121,57 @@ def build_and_deploy(
     template_dir: str | Path | None = None,
     project_name: str | None = None,
     cover_path: str | Path | None = None,
+    show: Show | None = None,
+    shows_root: str | Path | None = None,
 ) -> dict:
-    """Return out_dir (Path), url (str | None), qr_path (Path | None)."""
-    progress("build", "正在建立新聞 App…")
+    """Append one episode and rebuild the fixed show's RSS and fallback player."""
+    progress("build", "正在建立節目訂閱與播放器…")
     sanitize_metadata(episode)
-    output = build_app(
-        template_dir if template_dir is not None else default_template_dir(),
-        out_dir, episode, cover_path,
-    )
-    # The builder may have replaced the original directory containing the audio.
-    episode.audio_path = output / "episode.mp3"
+    if show is None:
+        if project_name:
+            try:
+                show = load_show(project_name, root_dir=shows_root)
+            except FileNotFoundError:
+                show = create_show(episode.show, episode.anchor, project_name,
+                                   root_dir=shows_root, passenger_names=episode.passenger_names)
+        else:
+            show = recent_or_default_show(episode.passenger_names, root_dir=shows_root)
+    validate_show_privacy(show, episode.passenger_names)
+    base_url = f"https://{show.project}.vercel.app"
+    item = add_episode(show, episode.audio_path, episode.duration_sec, passenger_names=episode.passenger_names)
+    output = build_show_site(show.directory,
+                             template_dir if template_dir is not None else default_template_dir(),
+                             out_dir, base_url)
+    episode.show, episode.anchor, episode.title = show.title, show.anchor, item["title"]
+    episode.audio_path = output / item["file"]
     url = None
     qr = None
     if deploy:
         progress("deploy", "正在部署至 Vercel…")
-        name = project_name or default_project_name()
-        url = deploy_app(output, name)
+        url = deploy_app(output, show.project)
         qr = make_qr(url, output / "qr.png")
     progress("done", "新聞 App 已完成。")
-    return {"out_dir": output, "url": url, "qr_path": qr}
+    return {"out_dir": output, "url": url, "feed_url": f"{base_url}/feed.xml", "qr_path": qr}
+
+
+def recent_or_default_show(passenger_names: list[str], *, root_dir=None) -> Show:
+    shows = list_shows(root_dir=root_dir)
+    if shows:
+        validate_show_privacy(shows[0], passenger_names)
+        return shows[0]
+    return create_show(
+        safe_metadata(DEFAULT_SHOW, DEFAULT_SHOW, passenger_names, "新聞快報"),
+        safe_metadata(DEFAULT_ANCHOR, DEFAULT_ANCHOR, passenger_names, "主播"),
+        description=safe_metadata(DEFAULT_DESCRIPTION, DEFAULT_DESCRIPTION, passenger_names, "每日新聞"),
+        root_dir=root_dir, passenger_names=passenger_names,
+    )
+
+
+def generate_and_deploy(request: NewsRequest, show: Show, work_dir: str | Path,
+                        out_dir: str | Path, *, deploy: bool = True,
+                        progress: Progress = _no_progress, script_text: str | None = None,
+                        template_dir: str | Path | None = None) -> dict:
+    validate_show_privacy(show, request.passenger_names)
+    request.show_title, request.anchor_name = show.title, show.anchor
+    episode = generate_episode(request, work_dir, progress, script_text=script_text)
+    return build_and_deploy(episode, out_dir, deploy, progress, show=show, template_dir=template_dir)

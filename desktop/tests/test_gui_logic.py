@@ -10,6 +10,7 @@ import pytest
 
 from prank_news import gui, pipeline, project
 from prank_news.deploy import deploy
+from prank_news.show import create_show
 
 
 @pytest.mark.parametrize(("text", "expected"), [
@@ -90,13 +91,14 @@ def test_edited_script_synthesis_preserves_exact_text_and_builds_app(monkeypatch
     progress = lambda stage, message: stages.append(stage)
     episode = pipeline.synthesize_episode(" 自訂節目 ", " 自訂主播 ", edited,
                                           gui.VOICES["男聲 雲哲"], tmp_path / "work", progress)
+    show = create_show("自訂節目", "自訂主播")
     result = pipeline.build_and_deploy(episode, tmp_path / "app", deploy=False,
-                                      template_dir=template, progress=progress)
+                                      template_dir=template, progress=progress, show=show)
     assert calls == [(edited, "zh-TW-YunJheNeural")]
     assert episode.script == edited
     assert (episode.show, episode.anchor) == ("自訂節目", "自訂主播")
     assert episode.duration_sec == 12.5
-    assert episode.audio_path == result["out_dir"] / "episode.mp3"
+    assert episode.audio_path.parent == result["out_dir"] / "episodes"
     assert episode.audio_path.read_bytes() == b"fake-audio"
     assert stages == ["tts", "done", "build", "done"]
 
@@ -147,17 +149,17 @@ def test_event_poll_reschedules_after_unexpected_exception():
     assert False in scheduled  # The next success event can still clear busy.
 
 
-def test_gui_each_build_refreshes_project_and_passes_private_names(monkeypatch, tmp_path):
+def test_gui_each_build_keeps_show_project_and_passes_private_names(monkeypatch, tmp_path):
     window = gui.PrankNewsWindow.__new__(gui.PrankNewsWindow)
-    names = iter(["morning-news-aaaaaa", "morning-news-bbbbbb"])
-    monkeypatch.setattr(gui, "default_project_name", lambda: next(names))
+    monkeypatch.setattr(gui, "default_project_name", lambda: pytest.fail("build must keep the show's project"))
     class Variable:
         def __init__(self, value): self.value = value
         def get(self): return self.value
         def set(self, value): self.value = value
     window.busy = False
-    for key, value in (("project", "old-project"), ("names", "王小明"),
-                       ("show", "王小明專屬早報"), ("anchor", "小明"),
+    window.selected_show = create_show("固定早報", "主播", "morning-news-fixed")
+    for key, value in (("project", "morning-news-fixed"), ("names", "王小明"),
+                       ("show", "固定早報"), ("anchor", "主播"),
                        ("voice", "女聲 曉臻"), ("base_dir", str(tmp_path))):
         setattr(window, key, Variable(value))
     window.script = SimpleNamespace(get=lambda *a: "王小明早安。")
@@ -167,12 +169,15 @@ def test_gui_each_build_refreshes_project_and_passes_private_names(monkeypatch, 
         captured.append(passenger_names)
         return SimpleNamespace(audio_path=Path(directory) / "episode.mp3")
     monkeypatch.setattr(gui, "synthesize_episode", synthesize)
-    monkeypatch.setattr(gui, "build_and_deploy", lambda *a, **k: {"out_dir": tmp_path})
+    def build(*args, **kwargs):
+        assert kwargs["show"] is window.selected_show
+        return {"out_dir": tmp_path}
+    monkeypatch.setattr(gui, "build_and_deploy", build)
     window._start = lambda job, completed, message: job()
     window._build()
     first = window.project.get()
     window._build()
-    assert first == "morning-news-aaaaaa" and window.project.get() == "morning-news-bbbbbb"
+    assert first == window.project.get() == "morning-news-fixed"
     assert captured == [["王小明"], ["王小明"]]
 
 
@@ -186,3 +191,13 @@ def test_gui_edited_metadata_is_sanitized_at_build(monkeypatch, tmp_path, templa
     result = pipeline.build_and_deploy(episode, tmp_path / "app", deploy=False, template_dir=template)
     public = (result["out_dir"] / "episode.json").read_text(encoding="utf-8")
     assert "王小明" not in public and "小明" not in public
+
+
+def test_gui_blocks_existing_show_overlap_and_requires_selection():
+    window = gui.PrankNewsWindow.__new__(gui.PrankNewsWindow)
+    window.selected_show = None
+    with pytest.raises(ValueError, match="新增節目"):
+        window._validate_selected_show(["王小明"])
+    window.selected_show = create_show("小明晨報", "主播")
+    with pytest.raises(ValueError, match="乘客名字"):
+        window._validate_selected_show(["王小明"])

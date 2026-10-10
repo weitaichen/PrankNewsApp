@@ -6,7 +6,8 @@ import vm from 'node:vm';
 const source = await readFile(new URL('../sw.js', import.meta.url), 'utf8');
 
 function workerHarness({ audioStatus = 200, coverStatus = 200, version = '__BUILD_ID__',
-  sharedStores, quotaAudio = false, failAudio = false, interruptAudio = false } = {}) {
+  sharedStores, quotaAudio = false, failAudio = false, interruptAudio = false,
+  audioPath = null } = {}) {
   // Use a subdirectory to verify paths work when the template isn't at /.
   const base = 'https://example.test/podcast/';
   const prefix = `news-podcast:${base}:`;
@@ -17,7 +18,7 @@ function workerHarness({ audioStatus = 200, coverStatus = 200, version = '__BUIL
   let claimed = false;
   let skipped = false;
   const data = {
-    audio: version === '__BUILD_ID__' ? 'episode.mp3' : `episode.mp3?v=${version}`,
+    audio: audioPath || (version === '__BUILD_ID__' ? 'episode.mp3' : `episode.mp3?v=${version}`),
     cover: version === '__BUILD_ID__' ? 'cover.png' : `cover.png?v=${version}`,
     title: version, buildId: version,
   };
@@ -27,7 +28,7 @@ function workerHarness({ audioStatus = 200, coverStatus = 200, version = '__BUIL
     if (!networkAvailable) throw new Error('Offline');
     const path = new URL(url).pathname;
     if (path.endsWith('episode.json')) return Response.json(data);
-    if (path.endsWith('episode.mp3')) {
+    if (path.endsWith('.mp3')) {
       if (failAudio) throw new Error('Interrupted download');
       if (interruptAudio) return new Response(new ReadableStream({
         start(controller) { controller.error(new Error('Body interrupted after HTTP 200')); },
@@ -47,7 +48,7 @@ function workerHarness({ audioStatus = 200, coverStatus = 200, version = '__BUIL
         async match(url) { return store.get(url)?.clone(); },
         async put(url, response) {
           assert.notEqual(response.status, 206, 'partial audio must never be cached');
-          if (quotaAudio && new URL(url).pathname.endsWith('episode.mp3')) throw new Error('QuotaExceededError');
+          if (quotaAudio && new URL(url).pathname.endsWith('.mp3')) throw new Error('QuotaExceededError');
           await response.clone().arrayBuffer(); // Real Cache.put waits for the complete body.
           store.set(url, response.clone());
         },
@@ -116,6 +117,26 @@ test('install precaches configured assets, excludes tests, cleans only own old c
   assert.equal((await complete.arrayBuffer()).byteLength, 200);
   const page = await worker.dispatch('fetch', { request: new Request(`${worker.base}index.html`) });
   assert.equal(page.status, 200);
+});
+
+test('versioned episodes directory supports offline full audio and Range after an update', async () => {
+  const previous = workerHarness({ version: 'A', audioPath: 'episodes/first.mp3?v=A' });
+  await previous.dispatch('install');
+  await previous.dispatch('activate');
+  const worker = workerHarness({ version: 'B', audioPath: 'episodes/second.mp3?v=B', sharedStores: previous.stores });
+  await worker.dispatch('install');
+  await worker.dispatch('activate');
+  assert.equal((await worker.status()).offlineReady, true);
+  worker.goOffline();
+  const url = `${worker.base}episodes/second.mp3?v=B`;
+  const range = await worker.dispatch('fetch', { request: new Request(url, { headers: { Range: 'bytes=0-1' } }) });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('Content-Range'), 'bytes 0-1/200');
+  assert.deepEqual(new Uint8Array(await range.arrayBuffer()), new Uint8Array([200, 199]));
+  const complete = await worker.dispatch('fetch', { request: new Request(url) });
+  assert.equal(complete.status, 200);
+  assert.equal((await complete.arrayBuffer()).byteLength, 200);
+  assert.equal(worker.stores.has(`${worker.prefix}A`), false);
 });
 
 test('each build gets its own cache and a complete update switches metadata and MP3 together', async () => {

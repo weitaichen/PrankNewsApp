@@ -47,8 +47,11 @@ def test_build_without_deploy(monkeypatch, tmp_path, template, episode):
         progress=lambda stage, msg: stages.append(stage),
     )
     assert stages == ["build", "done"]
-    assert result == {"out_dir": tmp_path / "app", "url": None, "qr_path": None}
-    assert episode.audio_path == result["out_dir"] / "episode.mp3"
+    assert result["out_dir"] == tmp_path / "app"
+    assert result["url"] is result["qr_path"] is None
+    assert re.fullmatch(r"https://morning-news-[a-z0-9]{6}\.vercel\.app/feed.xml", result["feed_url"])
+    assert episode.audio_path.parent == result["out_dir"] / "episodes"
+    assert episode.audio_path.is_file()
 
 
 def test_build_deploy_and_qr(monkeypatch, tmp_path, template, episode):
@@ -91,7 +94,8 @@ def test_build_sanitizes_all_public_metadata(tmp_path, template, episode, show, 
     data = json.loads(public)
     assert "passenger_names" not in data and "script" not in data
     metadata = json.loads(public)
-    assert metadata["show"] == metadata["title"] == "晨間新聞快報"
+    assert metadata["show"] == "晨間新聞快報"
+    assert metadata["title"].endswith("日 晨間新聞")
     assert metadata["anchor"] == "主播 林雅婷"
 
 
@@ -112,3 +116,23 @@ def test_default_anchor_cannot_leak_matching_passenger(episode):
     episode.passenger_names = ["林雅婷"]
     pipeline.sanitize_metadata(episode)
     assert "林雅婷" not in episode.anchor and "雅婷" not in episode.anchor
+
+
+def test_generate_to_fixed_show_and_qr_encodes_player_url(monkeypatch, tmp_path, template, request_data):
+    from prank_news.show import create_show
+    show = create_show("固定晨報", "主播", "morning-news-fixed")
+    seen = []
+    def generate(request):
+        assert request.show_title == show.title and request.anchor_name == show.anchor
+        return "乘客名字", "乘客名字", "王小明早安。"
+    def tts(script, path, voice):
+        path.write_bytes(b"audio")
+        return 3
+    monkeypatch.setattr(pipeline, "generate_script", generate)
+    monkeypatch.setattr(pipeline, "synthesize", tts)
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, project: seen.append(project) or f"https://{project}.vercel.app")
+    monkeypatch.setattr(pipeline, "make_qr", lambda url, path: seen.append(url) or path)
+    result = pipeline.generate_and_deploy(request_data, show, tmp_path / "work", tmp_path / "app", template_dir=template)
+    assert seen == [show.project, "https://morning-news-fixed.vercel.app"]
+    assert result["feed_url"] == "https://morning-news-fixed.vercel.app/feed.xml"
+    assert result["qr_path"] == result["out_dir"] / "qr.png"

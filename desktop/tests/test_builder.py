@@ -18,7 +18,7 @@ def test_build_structure_metadata_and_headers(tmp_path, template, episode):
     }
     assert (output / "assets" / "app.js").is_file()
     assert (output / "episode.mp3").read_bytes() == episode.audio_path.read_bytes()
-    assert (output / "cover.png").read_bytes() == b"template-cover"
+    assert (output / "cover.png").read_bytes() == (template / "cover.png").read_bytes()
     built = json.loads((output / "episode.json").read_text(encoding="utf-8"))
     build_id = built["buildId"]
     assert built == {

@@ -7,8 +7,9 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 import qrcode
 
@@ -30,15 +31,40 @@ def _deployment_url(output: str, project_name: str) -> str:
     return f"https://{project_name}.vercel.app"
 
 
-def check_public_episode(url: str) -> None:
-    """GET without cookies, CLI tokens, or protection bypass credentials."""
-    request = Request(url.rstrip("/") + "/episode.json", headers={"Accept": "application/json"})
-    with urlopen(request, timeout=20) as response:
+def check_public_episode(url: str, *, checker: Callable | None = None) -> None:
+    """Anonymous RSS/JSON GETs and a two-byte range GET of the latest audio."""
+    check = checker or urlopen
+    def verify_response(response, status):
         host = (urlsplit(response.geturl()).hostname or "").lower()
-        if response.status != 200 or host == "vercel.com" or host.endswith(".vercel.com"):
-            raise ValueError("公開網址導向登入頁或未回傳 HTTP 200。")
-        if not isinstance(json.load(response), dict):
+        if response.status != status or host == "vercel.com" or host.endswith(".vercel.com"):
+            raise ValueError(f"公開網址導向登入頁或未回傳 HTTP {status}。")
+    request = Request(url.rstrip("/") + "/feed.xml", headers={"Accept": "application/rss+xml"})
+    with check(request, timeout=20) as response:
+        verify_response(response, 200)
+        body = response.read()
+        try:
+            feed = ET.fromstring(body)
+        except ET.ParseError as exc:
+            raise ValueError("feed.xml 不是有效 XML。") from exc
+        if b"<rss" not in body or feed.tag != "rss":
+            raise ValueError("feed.xml 必須是 RSS。")
+    request = Request(url.rstrip("/") + "/episode.json", headers={"Accept": "application/json"})
+    with check(request, timeout=20) as response:
+        verify_response(response, 200)
+        metadata = json.load(response)
+        if not isinstance(metadata, dict):
             raise ValueError("episode.json 必須是 JSON 物件。")
+    audio = metadata.get("audio")
+    if not isinstance(audio, str) or not audio.strip():
+        raise ValueError("episode.json 缺少最新音檔。")
+    audio_url = urljoin(url.rstrip("/") + "/", audio)
+    parsed = urlsplit(audio_url)
+    if parsed.scheme != "https" or parsed.netloc != urlsplit(url).netloc:
+        raise ValueError("音檔必須是同源 https 網址。")
+    request = Request(audio_url, headers={"Range": "bytes=0-1", "Accept": "audio/mpeg"})
+    with check(request, timeout=20) as response:
+        verify_response(response, 206)
+        response.read(2)
 
 
 def _remove_mismatched_link(directory: Path, project_name: str) -> None:
@@ -131,7 +157,7 @@ def deploy(
         except (OSError, ValueError) as exc:
             if attempt == attempts - 1:
                 raise DeploymentError(
-                    "無法匿名讀取 episode.json；網址受 Vercel 部署保護，請到專案 "
+                    "無法匿名讀取 feed.xml、episode.json 或音檔 Range；網址受 Vercel 部署保護，請到專案 "
                     "Settings → Deployment Protection 關閉 Vercel Authentication。"
                     "若已關閉，請確認網路與 alias 已生效後重試。"
                 ) from exc

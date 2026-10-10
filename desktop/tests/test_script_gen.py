@@ -53,7 +53,8 @@ def test_runner_receives_prompt_utf8_and_timeout(monkeypatch, request_data):
         assert not working.is_relative_to(Path.cwd())
         return SimpleNamespace(returncode=0, stdout=json.dumps({"result": "節目：早安\n主播：雅婷\n\n" + "字" * 375}))
 
-    assert script_gen.generate_script(request_data, runner=runner, timeout=12) == ("早安", "雅婷", "字" * 375)
+    assert script_gen.generate_script(request_data, runner=runner, timeout=12) == (
+        request_data.show_title, request_data.anchor_name, "字" * 375)
     assert captured["command"] == ["C:/tools/claude.cmd", "-p", "--output-format", "json",
                                    "--tools", "", "--strict-mcp-config", "--setting-sources", "",
                                    "--safe-mode", "--no-session-persistence"]
