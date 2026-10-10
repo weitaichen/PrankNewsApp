@@ -1,29 +1,92 @@
-# prank_news Python 核心
+# prank_news 桌面程式與核心 API
 
-## 桌面介面（Windows）
+每個節目使用固定的 Vercel 專案與私人 podcast RSS feed。iPhone 在 Apple Podcasts 訂閱一次，之後產生的新聞會成為同一節目的新一集；PWA 播放器保留作為備案。QR code 開啟播放器頁面，由頁面的「在 Podcast 收聽」按鈕引導訂閱。
 
-首次使用請先完成以下準備；exe 不會替使用者登入或儲存 token／密碼：
+## 安裝與啟動（Windows）
 
-1. 安裝並登入 Claude Code。在 PowerShell 執行 `claude`，完成互動登入，確認 `claude` 在 PATH 上且訂閱可用。
-2. 安裝 Node.js（含 `npx`），在 PowerShell 執行 `npx vercel login` 完成 Vercel 登入。
-3. 安裝工具後重新開啟 GUI，讓程式取得更新的 PATH。產稿、語音合成、首次下載 Vercel CLI 和部署都需要網路。
+1. 安裝並登入 Claude Code：PowerShell 執行 `claude`，完成登入，確認 PATH 與訂閱可用。
+2. 安裝 Node.js（含 npx），執行 `npx vercel login`。
+3. 安裝工具後重新開啟 GUI，使更新的 PATH 生效。產稿、edge-tts 語音與部署需要網路；exe 不管理或儲存登入憑證。
 
-從 repo 的 `desktop/` 執行 GUI（Python 3.13，需包含 tkinter；Windows 官方 Python 安裝程式可安裝 Tcl/Tk）：
+Python 3.13 需包含 tkinter。從 `desktop/` 執行：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe run_gui.py
-# 也可使用：.\.venv\Scripts\python.exe -m prank_news.gui
+# 或：.\.venv\Scripts\python.exe -m prank_news.gui
 ```
 
-填入乘客名字（逗號或頓號分隔）、長度、內容梗與聲音，按「一、產生新聞稿」。完成後可編修節目名、主播名與稿子；字數含標點、不計空白，預估每分鐘 250 字。也可直接貼上稿子並填寫節目名、主播名，跳過 Claude。
+## 桌面操作
 
-按「二、產生語音並建立 App」會使用目前編修內容，預設輸出到 `%USERPROFILE%\Documents\PrankNews\<時間戳>`；「選資料夾」可改父資料夾，每次建置都另建時間戳子資料夾。完成後可「試聽」MP3 或「開啟資料夾」。修改稿子、節目／主播名或聲音後，請重新建置再部署。
+1. 頂部「節目」下拉選單可選既有節目。首次啟動會引導建立；「新增節目…」可填節目名、主播名，專案名自動產生，也可修改。專案名使用 1–100 個小寫英文字母、數字或中間連字號，禁止 `---`。節目與主播名不可含乘客名字或去姓後的兩字以上片段；新增及產稿／建置前都會檢查。
+2. 填乘客名字（逗號或頓號分隔）、分鐘、內容梗與主播聲音。按「一、產生新聞稿」後可編輯稿子，也可直接貼上稿子跳過 Claude。節目與主播名取自節目設定；開場要求「歡迎收聽〈節目名〉，我是〈主播名〉」。字數包含標點、不計空白，預估每分鐘 250 字。
+3. 按「二、產生語音並建立 App」，加入節目庫的新一集並重建完整 feed 與播放器。每次建置會新增單集；「試聽」「開啟資料夾」照常可用。輸出預設在 `%USERPROFILE%\Documents\PrankNews\<時間戳>`，可選其他父資料夾。修改稿子、乘客名、聲音或切換節目後須重新建置。
+4. 確認試聽後按「三、部署到手機」。每次部署到所選節目的固定專案。匿名檢查 `feed.xml`（200、有效 RSS XML）、`episode.json`（200 JSON）與最新 MP3 的 `Range: bytes=0-1`（206）；重試後仍失敗會提示至 Settings → Deployment Protection 關閉 Vercel Authentication，再確認網路與 alias 生效後重試。成功才顯示播放器網址、QR 與可複製的訂閱網址。
 
-確認 Vercel 專案名稱後按「三、部署到手機」。每次建立 App 都會產生新的 `morning-news-<6 位小寫英數>`，建置後仍可修改；名稱使用 1–100 個小寫英文字母／數字／中間連字號，禁止 `---`。部署後會匿名檢查公開網址的 `episode.json`，成功才顯示網址與 QR code。若受部署保護，請到專案 Settings → Deployment Protection 關閉 Vercel Authentication 後重試。用 iPhone 相機掃描 → Safari 開啟 → 分享 → 加入主畫面；打開 App 等到顯示「已可離線收聽」。部署會將建好的 App 上傳到 Vercel，請先試聽確認內容。
+第一次：iPhone 掃 QR → 按「在 Podcast 收聽」訂閱。之後新的一集會自動出現在 Podcasts App（可在節目頁下拉重新整理）。車上：接上 CarPlay → Podcasts → 本節目。
 
-工作期間會停用操作並顯示進度，請等工作完成後關閉視窗。錯誤會以中文對話框顯示，完整例外紀錄在 `%LOCALAPPDATA%\PrankNews\app.log`（最多約 2 MB／檔，保留 3 份輪替）。
+若按鈕沒有反應：打開 Podcasts App → 資料庫 → 右上角「⋯」→「透過 URL 追蹤節目」→ 貼上訂閱網址。PWA 的「複製訂閱網址」使用 Clipboard API；失敗時顯示可選取的網址文字。播放器提供最新一集與離線快取。
+
+工作期間操作會停用，請等完成後關閉視窗。錯誤使用中文對話框；完整例外紀錄在 `%LOCALAPPDATA%\PrankNews\app.log`（約 2 MB／檔，保留 3 份輪替）。
+
+## 節目庫與部署內容
+
+節目庫位於 `%USERPROFILE%\Documents\PrankNews\shows\<project>\`，與每次建置輸出分開。`show.json` 只存專案、節目名、主播名、中性說明與建立時間；`episodes.json` 只存單集 ID、中性標題、含時區發布時間、秒數、MP3 相對路徑與位元組數。乘客名單與稿子不寫入這些資料或公開 JSON／RSS，也不作為檔名。MP3 本身是包含乘客名字的播報內容。
+
+單集使用「10月10日 晨間新聞」等中性標題，同日第二集為「10月10日 晨間新聞（二）」，依序增加。新的在前，最多保留 20 集；超出的舊單集及本機 MP3 一起刪除，下次部署也不再包含舊檔。`.last-show` 只保存最近使用的專案名稱。
+
+部署網址為 `https://<project>.vercel.app`，訂閱網址為 `/feed.xml`。RSS 2.0 包含 iTunes／content namespace、絕對 HTTPS enclosure、位元組長度、唯一 GUID 與 RFC 2822 日期。`itunes:block=Yes` 避免被收錄至 Apple 目錄；feed 與音檔仍可由持有網址的人匿名存取。
+
+封面為 1400×1400 RGB PNG，依序嘗試系統 `msjhbd.ttc`、`msjh.ttc`、`mingliu.ttc`，以深色背景畫節目名。沒有可用字型時放大範本封面；另產出 PWA 的 512×512 `cover.png`。系統字型不打包。部署包含保留的所有 `episodes/<id>.mp3`；PWA `episode.json` 指向最新一集並帶 `feedUrl`。SW 版本與素材 URL 同用單集 ID，新版本完整快取後才接管，支援 `episodes/` 路徑的離線 Range。
+
+每次建置重建部署資料夾，保留範本既有 Vercel headers，新增 RSS MIME／no-cache 及 MP3 Accept-Ranges。部署沿用 `npx --yes vercel link --yes --project <名稱>` 與 `npx --yes vercel deploy --prod --yes`；不相符或無法辨識的 `.vercel` 連結會先清除。QR 編碼播放器網址。
+
+## CLI
+
+從 `desktop/` 執行：
+
+```powershell
+# 建立節目並產生第一集；--project 可省略以自動產生
+python -m prank_news.cli --name 王小明 --new-show "晨間新聞快報" --anchor "主播 林雅婷" --project morning-news-example --minutes 3 --topic "吐司開始唱歌" --deploy
+# 既有節目的下一集
+python -m prank_news.cli --name 王小明 --show morning-news-example --minutes 3 --topic "吐司開始唱歌" --deploy
+# 未指定節目：用最近使用的節目，空節目庫自動建立預設節目
+python -m prank_news.cli --name 王小明 --script-file script.txt --out output/test
+```
+
+`--show` 與 `--new-show` 互斥。`--anchor` 是新節目的主播名，`--project` 只用於建立節目。未加 `--deploy` 只建置本機資料，但仍加入節目庫。`--script-file` 讀 UTF-8（可含 BOM）並跳過 Claude；若有 `節目：`／`主播：` 標頭，只取稿子，公開資料一律使用節目設定。`--template` 可指定其他 PWA 範本。
+
+Claude 使用使用者的訂閱，於專用空暫存目錄執行 `claude -p`；停用工具、MCP 與自訂設定，沿用保留登入的 `--safe-mode`。回應仍要求前兩行標頭，缺標頭或字數不足目標 50% 重試一次。edge-tts 合成後由 mutagen 量 MP3 秒數；長稿失敗時改用最多 1000 字的句子段落合成、串接 MP3 frames，無需 ffmpeg。
+
+## 核心 API 與測試
+
+```python
+from prank_news import NewsRequest
+from prank_news.show import create_show, load_show, list_shows
+from prank_news.pipeline import generate_and_deploy
+
+show = create_show("晨間新聞快報", "主播 林雅婷", root_dir="output/local-shows")
+request = NewsRequest(["王小明"], 3, "吐司開始唱歌")
+result = generate_and_deploy(request, show, "output/work", "output/app",
+                             deploy=False, progress=callback)
+```
+
+`root_dir` 可注入 `create_show`／`load_show`／`list_shows` 作為節目庫根目錄。`add_episode(show, mp3_path, duration_sec)` 加單集；可注入含時區的 `when` 與私人 `passenger_names`，後者只用於檢查、不儲存。`builder.build_show_site(show_dir, template_dir, out_dir, base_url)` 產生部署內容。
+
+GUI 分步呼叫 `generate_script(request)`、`synthesize_episode(...)`、`build_and_deploy(..., show=show, deploy=False)`，第三步只部署已建內容。`generate_and_deploy` 串接完整流程。回傳包含 `out_dir: Path`、`url: str | None`、`feed_url: str`、`qr_path: Path | None`；未部署時 `url`／`qr_path` 是 `None`。進度 callback 接收 `(stage, message)`：產生為 `script → tts → done`，建置為 `build → deploy（選用） → done`。
+
+這些 API 同步阻塞，適合 GUI 工作執行緒；不要在已有 asyncio 事件迴圈的同一執行緒呼叫語音合成。建置拒絕會覆蓋程式、範本或節目庫的輸出目錄。
+
+```powershell
+# 從 desktop/
+python -m pytest -q
+python -c "import prank_news.gui"
+# 從 repo 根目錄
+node --test pwa_template/tests/
+```
+
+pytest 使用假 Claude runner、假 TTS、假公開 checker 與隔離節目庫，不呼叫真實服務或部署。Apple Podcasts 訂閱、更新頻率、CarPlay、鎖定螢幕、導航插話及 Vercel 首次登入／部署仍需在使用環境驗證。
 
 ## 打包單一 exe
 
@@ -31,64 +94,15 @@ python -m venv .venv
 
 ```powershell
 .\build_exe.ps1
-# 若 PowerShell 的執行原則擋下腳本，可僅針對這次執行：
+# 若執行原則阻擋，只對這次執行設定：
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_exe.ps1
 # 指定 Python：.\build_exe.ps1 -Python C:\Python313\python.exe
 ```
 
-腳本建立／使用 `desktop/.venv`，安裝執行依賴、pytest 與 PyInstaller 6，先執行測試，再依 `prank_news.spec` 建置 `desktop/dist/PrankNews.exe`。首次安裝需要可連線的套件來源。若依賴已安裝，也可自行執行：
+腳本建立／使用 `desktop/.venv`、安裝依賴、執行測試，然後依 `prank_news.spec` 建置 `desktop/dist/PrankNews.exe`。也可直接執行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --distpath dist --workpath build prank_news.spec
 ```
 
-spec 使用 onefile、windowed 模式，將 repo 的 `pwa_template/` 放到 `_MEIPASS/pwa_template`，排除 `tests/` 與 `README.md`；包含 edge-tts 資料、certifi TLS 憑證、qrcode、Pillow ImageTk／PNG 與 mutagen。打包不會改動原始範本。Claude 與 npx 使用核心既有的 `CREATE_NO_WINDOW`，不另開主控台；exe 使用者仍需自行安裝、登入這兩個外部 CLI。
-
-離線驗證（不呼叫 Claude、語音服務或部署）：
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -c "import prank_news.gui"
-```
-
-GUI 目視操作、真實語音連線、外部 CLI 無黑色視窗、Vercel 登入／部署與 iPhone 離線收聽需在使用環境另驗證。
-
-## 命令列與核心 API
-
-Python 3.13。從 `desktop/` 執行：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-python -m pytest -q
-python -m prank_news.cli --name 王小明 --name 陳小美 --minutes 3 --topic "吐司開始唱歌"
-python -m prank_news.cli --name 測試 --script-file script.txt --out output/test
-```
-
-Claude 流程使用 PATH 上已安裝、已登入的 Claude Code，透過 `claude -p` 與使用者訂閱產稿。呼叫在專用空暫存目錄執行，停用工具、MCP 與自訂設定；已依本機 2.1.296 的 help 驗證旗標，使用保留登入的 `--safe-mode`。缺少節目／主播標頭或稿子不足目標字數的 50% 會重試一次，仍失敗則顯示中文錯誤。`--script-file` 讀取 UTF-8（可含 BOM），直接跳過 Claude。TTS 使用需要網路的 edge-tts，並用 mutagen 測量 MP3 秒數。核心不管理或寫入任何憑證。
-
-範本預設為 repo 根目錄 `pwa_template/`；PyInstaller 模式為 `_MEIPASS/pwa_template`，打包者須加入此 data 目錄。範本尚未整合時可用 `--template <假範本資料夾>` 測試，核心不建立或修改原始範本。
-
-加 `--deploy` 才部署；請先自行安裝 Node.js 並執行 `npx vercel login`。本工具的 `--project morning-news-example` 指定專案名稱，GUI／CLI／核心共用 `morning-news-<6 位小寫英數>` 產生器。若 `.vercel/project.json` 的名稱不同或無法判斷，先移除該連結，再執行 `npx --yes vercel link --yes --project <名稱>` 建立／連結專案及 `npx --yes vercel deploy --prod --yes`。不依賴 deprecated 的 `vercel.json.name`，保留原有 headers。公開網址優先採 stdout／stderr 的 `Aliased:`，否則用 `https://<名稱>.vercel.app`，以無憑證 GET 驗證 JSON 後才產生 QR。依據：[Vercel link 文件](https://vercel.com/docs/cli/link)及[CLI link 原始碼](https://github.com/vercel/vercel/blob/main/packages/cli/src/commands/link/index.ts)。本次沙盒無法下載 Vercel CLI 執行 help；真實登入、首次建立專案與部署須在整合環境再驗證。
-
-GUI 可在工作執行緒呼叫：
-
-```python
-from prank_news import NewsRequest
-from prank_news.pipeline import generate_episode, build_and_deploy
-
-request = NewsRequest(["王小明"], 3, "吐司開始唱歌")
-episode = generate_episode(request, "output/work", progress=callback)
-result = build_and_deploy(episode, "output/app", deploy=False, progress=callback)
-```
-
-GUI 的分步流程先用 `script_gen.generate_script(request)` 取得節目名／主播名／稿子，再呼叫 `pipeline.synthesize_episode(show, anchor, script, voice, work_dir, progress=callback, passenger_names=names)`。此 API 原樣合成使用者編修的稿子，回傳 `Episode`；進度為 `tts → done`，之後可接 `build_and_deploy(..., deploy=False)`。乘客名單僅供建置前檢查 show／anchor／title；包含乘客名字或去掉姓氏後的兩字以上片段時，改用中性值，名單與稿子不寫入公開 JSON。GUI 的第三步只部署已建好的資料夾並產生 QR code，不會重新合成或建置。
-
-callback 接收 `(stage, message)`。產生階段依序 `script → tts → done`，建置階段 `build → deploy（選用） → done`；整體流程中會有兩次 `done`，各表示該次函式已完成。函式為同步阻塞介面；`synthesize` 使用 `asyncio.run`，請勿在執行 asyncio 事件迴圈的同一執行緒呼叫。
-
-`result` 包含 `out_dir: Path`、`url: str | None`、`qr_path: Path | None`。`Episode.audio_path` 在建置後更新為輸出音檔。`build_and_deploy` 額外接受 `template_dir`、`project_name`、`cover_path`，供整合與測試使用。
-
-建置先暫存素材再清空輸出，所以來源 MP3／封面可位於原輸出目錄中；拒絕會覆蓋程式、範本或它們的上層目錄的輸出位置。`episode.json` description 使用固定的「今日頭條新聞」，不含完整稿子。長稿一次合成失敗時，改用最多 1000 字的句子段落合成，串接 MP3 frame bytes；回傳各段實測音長總和，不需要 ffmpeg。
-
-所有 pytest 都使用假 CLI runner、假 TTS 或假範本；不呼叫 Claude、Vercel 或網路。實際語音連線測試需另外透過 `--script-file` 執行。
+spec 使用 onefile／windowed，將 `pwa_template/` 放到 `_MEIPASS/pwa_template`（不含 tests／README），包含 edge-tts、certifi、qrcode、Pillow 與 mutagen。Pillow 使用系統中文字型，無需額外打包字型。Claude／npx 沿用 `CREATE_NO_WINDOW`。GUI 目視操作、打包後外部 CLI 與真實連線請另行驗證。

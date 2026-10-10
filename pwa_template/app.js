@@ -134,9 +134,40 @@ function renderEpisode(data) {
   const cover = document.getElementById('cover');
   cover.src = episode.cover;
   cover.alt = `${episode.show}節目封面`;
+  renderSubscription(data.feedUrl);
   setupMediaSession();
   updateProgress();
 }
+
+function renderSubscription(feedUrl) {
+  const section = document.getElementById('podcast-subscription');
+  section.hidden = true;
+  document.getElementById('feed-url').hidden = true;
+  document.getElementById('feed-copy-status').textContent = '';
+  if (typeof feedUrl !== 'string' || !feedUrl.trim()) return;
+  try {
+    const url = new URL(feedUrl);
+    if (url.protocol !== 'https:' || url.username || url.password) return;
+    document.getElementById('podcast-listen').href = `podcasts://${url.host}${url.pathname}${url.search}`;
+    document.getElementById('feed-url').value = url.href;
+    document.getElementById('copy-feed').disabled = false;
+    section.hidden = false;
+  } catch { /* A missing or invalid subscription URL leaves the player usable. */ }
+}
+
+document.getElementById('copy-feed').addEventListener('click', async () => {
+  const field = document.getElementById('feed-url');
+  if (!field.value || document.getElementById('podcast-subscription').hidden) return;
+  try {
+    await navigator.clipboard.writeText(field.value);
+    document.getElementById('feed-copy-status').textContent = '訂閱網址已複製。';
+  } catch {
+    field.hidden = false;
+    field.focus();
+    field.select();
+    document.getElementById('feed-copy-status').textContent = '請選取並複製下方訂閱網址。';
+  }
+});
 
 function applyCacheStatus(status) {
   // The worker's committed metadata and media are always one episode.

@@ -73,3 +73,34 @@ def test_cli_rejects_symlink_output_without_deleting_target(monkeypatch, tmp_pat
                      "--template", str(template)]) == 1
     assert "連結" in capsys.readouterr().err
     assert output.is_symlink() and marker.read_text() == "keep"
+
+
+def test_cli_new_existing_and_recent_show_keep_project(monkeypatch, tmp_path, template, capsys):
+    from prank_news.show import list_shows, load_show
+    def tts(text, path, voice):
+        path.write_bytes(b"audio")
+        return 5
+    monkeypatch.setattr(pipeline, "synthesize", tts)
+    monkeypatch.setattr(pipeline, "generate_script", lambda *args: pytest.fail("script-file must skip Claude"))
+    projects = []
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, project: projects.append(project) or f"https://{project}.vercel.app")
+    script = tmp_path / "script.txt"
+    script.write_text("節目：小明專屬\n主播：王小明\n\n王小明早安。", encoding="utf-8")
+    common = ["--name", "王小明", "--script-file", str(script), "--template", str(template), "--deploy"]
+    assert cli.main(common + ["--new-show", "固定晨報", "--anchor", "主播", "--project", "morning-news-fixed",
+                              "--out", str(tmp_path / "one")]) == 0
+    assert cli.main(common + ["--show", "morning-news-fixed", "--out", str(tmp_path / "two")]) == 0
+    assert cli.main(common + ["--out", str(tmp_path / "three")]) == 0
+    show = load_show("morning-news-fixed")
+    assert projects == [show.project] * 3
+    assert len(show.episodes) == 3 and len(list_shows()) == 1
+    metadata = json.loads((tmp_path / "three" / "episode.json").read_text(encoding="utf-8"))
+    assert metadata["show"] == "固定晨報" and metadata["anchor"] == "主播"
+    assert "小明" not in json.dumps(metadata, ensure_ascii=False)
+    assert "訂閱網址：https://morning-news-fixed.vercel.app/feed.xml" in capsys.readouterr().out
+
+
+def test_cli_rejects_new_show_with_given_name_before_synthesis(monkeypatch, capsys):
+    monkeypatch.setattr(pipeline, "synthesize", lambda *args: pytest.fail("invalid show must not synthesize"))
+    assert cli.main(["--name", "王小明", "--new-show", "小明晨報"]) == 1
+    assert "乘客名字" in capsys.readouterr().err

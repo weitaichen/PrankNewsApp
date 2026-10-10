@@ -1,6 +1,12 @@
 import pytest
+from PIL import Image
 
 from prank_news.models import Episode, NewsRequest
+
+
+@pytest.fixture(autouse=True)
+def isolated_show_library(monkeypatch, tmp_path):
+    monkeypatch.setattr("prank_news.show.default_shows_root", lambda: tmp_path / "shows")
 
 
 @pytest.fixture
@@ -18,7 +24,7 @@ def template(tmp_path):
         "episode.json": "old metadata", "episode.mp3": "old audio",
     }.items():
         (root / name).write_text(content, encoding="utf-8")
-    (root / "cover.png").write_bytes(b"template-cover")
+    Image.new("RGB", (512, 512), "#111820").save(root / "cover.png")
     (root / "tests").mkdir()
     (root / "tests" / "test.js").write_text("test")
     (root / "assets").mkdir()

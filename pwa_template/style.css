@@ -67,3 +67,11 @@ h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
 footer { margin-top: 28px; text-align: center; color: #85909d; font-size: 11px; letter-spacing: .08em; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 350px) { .player { padding-left: max(18px, env(safe-area-inset-left)); padding-right: max(18px, env(safe-area-inset-right)); } .controls { gap: 28px; } }
+/* Subscription remains independent of audio loading and offline preparation. */
+.podcast-subscription { margin: 0 0 24px; text-align: center; }
+.podcast-listen { display: block; padding: 16px; border-radius: 14px; background: #b5e3f3; color: #111820; font-size: 1.15rem; font-weight: 700; text-decoration: none; }
+.copy-feed { margin: 10px auto; background: transparent; border: 0; color: #b5e3f3; font: inherit; font-size: .85rem; cursor: pointer; }
+.feed-url { width: 100%; padding: 10px; font: inherit; }
+.podcast-subscription details { color: #b5bdc7; font-size: .85rem; text-align: left; }
+.podcast-subscription summary { cursor: pointer; }
+.podcast-subscription [role="status"] { font-size: .85rem; }

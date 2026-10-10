@@ -9,7 +9,7 @@ const episode = JSON.parse(await readFile(new URL('../episode.json', import.meta
 
 function playerHarness({ available = true, unsupportedActions = false,
   offlineReady = null, networkAvailable = available, slowWorker = false,
-  workerEpisode = null } = {}) {
+  workerEpisode = null, clipboard = null } = {}) {
   const elements = new Map();
   function element(id) {
     const listeners = new Map();
@@ -25,6 +25,8 @@ function playerHarness({ available = true, unsupportedActions = false,
       setAttribute(key, value) { attributes.set(key, value); },
       getAttribute(key) { return attributes.get(key); },
       removeAttribute(key) { attributes.delete(key); if (key === 'src') this.src = ''; },
+      focus() { this.focused = true; },
+      select() { this.selected = true; },
     };
   }
   const document = {
@@ -70,6 +72,7 @@ function playerHarness({ available = true, unsupportedActions = false,
   let becomeReady;
   const workerReady = slowWorker ? new Promise(resolve => { becomeReady = resolve; }) : Promise.resolve({ active: worker });
   const navigator = {
+    ...(clipboard ? { clipboard } : {}),
     mediaSession,
     serviceWorker: {
       async register() { return { active: slowWorker ? null : worker }; },
@@ -131,6 +134,66 @@ test('missing MP3 gives a friendly message without setting audio src or logging 
   assert.equal(player.audio.src, 'https://example.test/podcast/episode.mp3');
   assert.equal(player.get('play').disabled, false);
   assert.equal(player.get('offline-status').textContent, '已可離線收聽');
+});
+
+test('subscription controls are hidden without feedUrl', async () => {
+  const player = playerHarness();
+  await player.ready();
+  assert.equal(player.get('podcast-subscription').hidden, true);
+});
+
+test('private feed opens Podcasts and copies the HTTPS subscription URL', async () => {
+  const copied = [];
+  const feedUrl = 'https://example.test/feed.xml';
+  const player = playerHarness({ workerEpisode: { ...episode, feedUrl },
+    clipboard: { async writeText(value) { copied.push(value); } } });
+  await player.ready();
+  assert.equal(player.get('podcast-subscription').hidden, false);
+  assert.equal(player.get('podcast-listen').href, 'podcasts://example.test/feed.xml');
+  assert.equal(player.get('feed-url').hidden, true);
+  player.get('copy-feed').emit('click');
+  await player.settle();
+  assert.deepEqual(copied, [feedUrl]);
+  assert.equal(player.get('feed-copy-status').textContent, '訂閱網址已複製。');
+});
+
+for (const clipboard of [null, { async writeText() { throw new Error('Denied'); } }]) {
+  test(`clipboard ${clipboard ? 'rejection' : 'unavailable'} exposes selectable feed text`, async () => {
+    const feedUrl = 'https://example.test/feed.xml';
+    const player = playerHarness({ workerEpisode: { ...episode, feedUrl }, clipboard });
+    await player.ready();
+    player.get('copy-feed').emit('click');
+    await player.settle();
+    assert.equal(player.get('feed-url').hidden, false);
+    assert.equal(player.get('feed-url').value, feedUrl);
+    assert.equal(player.get('feed-url').focused, true);
+    assert.equal(player.get('feed-url').selected, true);
+  });
+}
+
+for (const feedUrl of ['http://example.test/feed.xml', 'https://user@example.test/feed.xml', 'javascript:alert(1)', 'invalid']) {
+  test(`invalid subscription URL stays hidden: ${feedUrl}`, async () => {
+    const player = playerHarness({ workerEpisode: { ...episode, feedUrl } });
+    await player.ready();
+    assert.equal(player.get('podcast-subscription').hidden, true);
+    assert.equal(player.get('play').disabled, false);
+  });
+}
+
+test('a custom page alias can subscribe to the fixed Vercel feed URL', async () => {
+  const player = playerHarness({ workerEpisode: { ...episode, feedUrl: 'https://morning-news-fixed.vercel.app/feed.xml' } });
+  await player.ready();
+  assert.equal(player.get('podcast-subscription').hidden, false);
+  assert.equal(player.get('podcast-listen').href, 'podcasts://morning-news-fixed.vercel.app/feed.xml');
+});
+
+test('public page has collapsed subscription help and neutral wording', async () => {
+  const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(html, /在 Podcast 收聽/);
+  assert.match(html, /<details>/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
+  assert.match(html, /透過 URL 追蹤節目/);
+  assert.doesNotMatch(html + source, /整人|假新聞|prank/i);
 });
 
 test('play, pause, progress, skip and Media Session share one audio element', async () => {

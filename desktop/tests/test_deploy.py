@@ -130,7 +130,7 @@ def test_public_check_retries_alias_delay_and_reports_protection(monkeypatch, tm
 
 
 @pytest.mark.parametrize("status, destination, body, valid", [
-    (200, "https://news.vercel.app/episode.json", b'{"title":"news"}', True),
+    (200, "https://news.vercel.app/episode.json", b'{"title":"news","audio":"episodes/latest.mp3?v=build"}', True),
     (403, "https://news.vercel.app/episode.json", b'{}', False),
     (200, "https://vercel.com/login", b'{}', False),
     (200, "https://news.vercel.app/episode.json", b'<html>login</html>', False),
@@ -145,8 +145,19 @@ def test_anonymous_episode_get_validates_json_and_redirect(monkeypatch, status, 
     response.status = status
 
     def opener(request, **kwargs):
-        assert request.full_url == "https://news.vercel.app/episode.json"
         assert request.get_method() == "GET"
+        if request.full_url.endswith("/feed.xml"):
+            rss = Response(b'<rss version="2.0"><channel/></rss>')
+            rss.status = 200
+            rss.geturl = lambda: request.full_url
+            return rss
+        if "/episodes/" in request.full_url:
+            assert request.get_header("Range") == "bytes=0-1"
+            mp3 = Response(b"mp")
+            mp3.status = 206
+            mp3.geturl = lambda: request.full_url
+            return mp3
+        assert request.full_url == "https://news.vercel.app/episode.json"
         assert set(key.lower() for key in request.headers) == {"accept"}
         return response
 
@@ -156,3 +167,43 @@ def test_anonymous_episode_get_validates_json_and_redirect(monkeypatch, status, 
     else:
         with pytest.raises(ValueError):
             module.check_public_episode("https://news.vercel.app")
+
+
+@pytest.mark.parametrize("failure", [None, "rss-status", "rss-xml", "json-status", "range-status"])
+def test_public_check_three_endpoints_and_deployment_retry(monkeypatch, tmp_path, failure):
+    calls = []
+    class Response(io.BytesIO):
+        def __init__(self, body, status, url):
+            super().__init__(body)
+            self.status, self.url = status, url
+        def geturl(self):
+            return self.url
+    def checker(request, **kwargs):
+        url = request.full_url
+        assert request.get_method() == "GET"
+        assert not any(key.lower() in {"authorization", "cookie"} for key in request.headers)
+        calls.append((url, request.get_header("Range")))
+        if url.endswith("feed.xml"):
+            return Response(b"invalid" if failure == "rss-xml" else b'<rss version="2.0"><channel/></rss>',
+                            403 if failure == "rss-status" else 200, url)
+        if url.endswith("episode.json"):
+            return Response(b'{"audio":"episodes/latest.mp3?v=build"}',
+                            403 if failure == "json-status" else 200, url)
+        assert url == "https://morning-news.vercel.app/episodes/latest.mp3?v=build"
+        assert request.get_header("Range") == "bytes=0-1"
+        return Response(b"ab", 200 if failure == "range-status" else 206, url)
+    monkeypatch.setattr(module.shutil, "which", lambda name: "npx")
+    runner = lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr="")
+    sleeps = []
+    public_check = lambda url: module.check_public_episode(url, checker=checker)
+    if failure:
+        with pytest.raises(module.DeploymentError, match="Deployment Protection"):
+            module.deploy(tmp_path, "morning-news", runner, public_check=public_check, sleeper=sleeps.append)
+        assert sleeps == [2, 2]
+        assert sum(url.endswith("feed.xml") for url, _ in calls) == 3
+    else:
+        assert module.deploy(tmp_path, "morning-news", runner, public_check=public_check) == "https://morning-news.vercel.app"
+        assert calls == [
+            ("https://morning-news.vercel.app/feed.xml", None),
+            ("https://morning-news.vercel.app/episode.json", None),
+            ("https://morning-news.vercel.app/episodes/latest.mp3?v=build", "bytes=0-1")]

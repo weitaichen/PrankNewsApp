@@ -31,6 +31,17 @@
         <p class="byline"><span id="anchor"></span><span id="published"></span></p>
       </section>
 
+      <section id="podcast-subscription" class="podcast-subscription" aria-label="節目訂閱" hidden>
+        <a id="podcast-listen" class="podcast-listen">在 Podcast 收聽</a>
+        <button id="copy-feed" class="copy-feed" type="button">複製訂閱網址</button>
+        <p id="feed-copy-status" role="status" aria-live="polite"></p>
+        <input id="feed-url" class="feed-url" type="text" readonly aria-label="訂閱網址" hidden>
+        <details>
+          <summary>若按鈕沒有反應</summary>
+          <p>打開 Podcasts App → 資料庫 → 右上角「⋯」→「透過 URL 追蹤節目」→ 貼上網址</p>
+        </details>
+      </section>
+
       <section class="playback" aria-label="播放控制">
         <label class="sr-only" for="progress">播放進度</label>
         <input id="progress" class="progress" type="range" min="0" max="180" value="0" step="0.1" disabled>

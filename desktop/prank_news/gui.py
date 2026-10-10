@@ -21,6 +21,8 @@ from .project import default_project_name, validate_project_name
 from .pipeline import build_and_deploy, synthesize_episode
 from .script_gen import ScriptGenerationError, generate_script
 from .tts import SynthesisError
+from .show import (create_show, list_shows, mark_used, validate_show_privacy,
+                   DEFAULT_SHOW, DEFAULT_ANCHOR)
 
 LOGGER = logging.getLogger("prank_news.gui")
 VOICES = {
@@ -30,8 +32,9 @@ VOICES = {
 }
 TOPIC_HINT = "例如：他最近在學衝浪、很愛吃臭豆腐（可留空）"
 PHONE_HINT = (
-    "用 iPhone 相機掃描 → Safari 開啟 → 分享 → 加入主畫面；"
-    "打開 App 等到顯示『已可離線收聽』"
+    "第一次：iPhone 掃 QR → 按『在 Podcast 收聽』訂閱。"
+    "之後新的一集會自動出現在 Podcasts App（可在節目頁下拉重新整理）。"
+    "車上：接上 CarPlay → Podcasts → 本節目。"
 )
 
 
@@ -78,29 +81,35 @@ class PrankNewsWindow:
         self.qr_image: ImageTk.PhotoImage | None = None
         self.locked_widgets: list[tuple[tk.Widget, str]] = []
         root.title("PrankNews 整人新聞製作")
-        root.geometry("760x720")
+        root.geometry("760x840")
         root.minsize(660, 640)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
         self.names = tk.StringVar()
         self.minutes = tk.StringVar(value="3")
         self.voice = tk.StringVar(value=next(iter(VOICES)))
-        self.project = tk.StringVar(value=default_project_name())
+        self.project = tk.StringVar()
+        self.show_choice = tk.StringVar()
+        self.selected_show = None
+        self.shows = []
         self.show = tk.StringVar()
         self.anchor = tk.StringVar()
         profile = Path(os.environ.get("USERPROFILE", str(Path.home())))
         self.base_dir = tk.StringVar(value=str(profile / "Documents" / "PrankNews"))
         self.url = tk.StringVar()
+        self.feed_url = tk.StringVar()
         self.status = tk.StringVar(value="請輸入素材，再按「產生新聞稿」。")
         self.count = tk.StringVar(value="0 字｜預估 0.0 分鐘（250 字／分鐘，不計空白）")
         self._create_widgets()
-        for variable in (self.show, self.anchor, self.voice):
+        for variable in (self.show, self.anchor, self.voice, self.names):
             variable.trace_add("write", self._content_changed)
-        self.project.trace_add("write", self._project_changed)
+        self._reload_shows()
         root.protocol("WM_DELETE_WINDOW", self._close)
         root.report_callback_exception = self._callback_error
         self._refresh_buttons()
         self.poll_id = root.after(80, self._poll_events)
+        if not self.shows:
+            root.after(100, self._new_show)
 
     def _lockable(self, widget: tk.Widget, idle_state: str = "normal") -> tk.Widget:
         self.locked_widgets.append((widget, idle_state))
@@ -110,9 +119,18 @@ class PrankNewsWindow:
         panel = ttk.Frame(self.root, padding=12)
         panel.grid(row=0, column=0, sticky="nsew")
         panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(1, weight=1)
+        panel.rowconfigure(2, weight=1)
+        show_panel = ttk.LabelFrame(panel, text="節目", padding=8)
+        show_panel.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        show_panel.columnconfigure(0, weight=1)
+        self.show_combo = self._lockable(ttk.Combobox(show_panel, textvariable=self.show_choice,
+                                                     state="readonly"), "readonly")
+        self.show_combo.grid(row=0, column=0, sticky="ew")
+        self.show_combo.bind("<<ComboboxSelected>>", self._select_show)
+        self._lockable(ttk.Button(show_panel, text="新增節目…", command=self._new_show)).grid(
+            row=0, column=1, padx=(8, 0))
         inputs = ttk.LabelFrame(panel, text="輸入素材", padding=8)
-        inputs.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        inputs.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         inputs.columnconfigure(1, weight=1)
         inputs.columnconfigure(3, weight=1)
         ttk.Label(inputs, text="乘客名字").grid(row=0, column=0, sticky="w")
@@ -141,20 +159,17 @@ class PrankNewsWindow:
         self.topic.bind("<FocusIn>", self._update_topic_hint)
         self.topic.bind("<FocusOut>", self._update_topic_hint)
         self.topic.bind("<<Modified>>", self._topic_modified)
-        ttk.Label(inputs, text="Vercel 專案").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        self._lockable(ttk.Entry(inputs, textvariable=self.project)).grid(
-            row=4, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=(6, 0))
 
         editor = ttk.LabelFrame(panel, text="新聞稿（可編輯，也可直接貼上稿子）", padding=8)
-        editor.grid(row=1, column=0, sticky="nsew")
+        editor.grid(row=2, column=0, sticky="nsew")
         editor.columnconfigure(1, weight=1)
         editor.columnconfigure(3, weight=1)
         editor.rowconfigure(1, weight=1)
         ttk.Label(editor, text="節目名").grid(row=0, column=0, sticky="w")
-        self._lockable(ttk.Entry(editor, textvariable=self.show)).grid(
+        self._lockable(ttk.Entry(editor, textvariable=self.show, state="readonly"), "readonly").grid(
             row=0, column=1, sticky="ew", padx=8)
         ttk.Label(editor, text="主播名").grid(row=0, column=2, sticky="w")
-        self._lockable(ttk.Entry(editor, textvariable=self.anchor)).grid(
+        self._lockable(ttk.Entry(editor, textvariable=self.anchor, state="readonly"), "readonly").grid(
             row=0, column=3, sticky="ew", padx=(8, 0))
         self.script = tk.Text(editor, height=6, wrap="word", undo=True)
         self.script.grid(row=1, column=0, columnspan=4, sticky="nsew", pady=(6, 4))
@@ -166,7 +181,7 @@ class PrankNewsWindow:
         ttk.Label(editor, textvariable=self.count).grid(row=2, column=0, columnspan=4, sticky="w")
 
         actions = ttk.Frame(panel)
-        actions.grid(row=2, column=0, sticky="ew", pady=8)
+        actions.grid(row=3, column=0, sticky="ew", pady=8)
         for column in range(3):
             actions.columnconfigure(column, weight=1)
         self.generate_button = ttk.Button(actions, text="一、產生新聞稿", command=self._generate)
@@ -176,7 +191,7 @@ class PrankNewsWindow:
         self.deploy_button = ttk.Button(actions, text="三、部署到手機", command=self._deploy)
         self.deploy_button.grid(row=0, column=2, sticky="ew", padx=(4, 0))
         folder = ttk.Frame(panel)
-        folder.grid(row=3, column=0, sticky="ew")
+        folder.grid(row=4, column=0, sticky="ew")
         folder.columnconfigure(1, weight=1)
         ttk.Label(folder, text="輸出位置").grid(row=0, column=0)
         self._lockable(ttk.Entry(folder, textvariable=self.base_dir, state="readonly"), "readonly").grid(
@@ -188,19 +203,75 @@ class PrankNewsWindow:
         self.folder_button.grid(row=0, column=4)
 
         result = ttk.LabelFrame(panel, text="手機 App", padding=8)
-        result.grid(row=4, column=0, sticky="ew", pady=8)
+        result.grid(row=5, column=0, sticky="ew", pady=8)
         result.columnconfigure(0, weight=1)
         ttk.Entry(result, textvariable=self.url, state="readonly").grid(row=0, column=0, sticky="ew")
         self.copy_button = ttk.Button(result, text="複製網址", command=self._copy_url)
         self.copy_button.grid(row=0, column=1, padx=8)
         self.qr_label = ttk.Label(result, text="部署完成後顯示 QR code", anchor="center", width=24)
-        self.qr_label.grid(row=0, column=2, rowspan=2, padx=(4, 0))
+        self.qr_label.grid(row=0, column=2, rowspan=3, padx=(4, 0))
+        ttk.Entry(result, textvariable=self.feed_url, state="readonly").grid(
+            row=1, column=0, sticky="ew", pady=(6, 0))
+        self.copy_feed_button = ttk.Button(result, text="複製訂閱網址", command=self._copy_feed)
+        self.copy_feed_button.grid(row=1, column=1, padx=8, pady=(6, 0))
         ttk.Label(result, text=PHONE_HINT, wraplength=450, justify="left").grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.progressbar = ttk.Progressbar(panel, mode="indeterminate", length=200)
-        self.progressbar.grid(row=5, column=0, sticky="ew")
+        self.progressbar.grid(row=6, column=0, sticky="ew")
         ttk.Label(panel, textvariable=self.status, anchor="w", wraplength=710).grid(
-            row=6, column=0, sticky="ew", pady=(4, 0))
+            row=7, column=0, sticky="ew", pady=(4, 0))
+
+    def _reload_shows(self, project=None) -> None:
+        self.shows = list_shows()
+        self.show_combo.configure(values=[f"{show.title}（{show.project}）" for show in self.shows])
+        if self.shows:
+            index = next((i for i, show in enumerate(self.shows) if show.project == project), 0)
+            self.show_combo.current(index)
+            self._select_show()
+
+    def _select_show(self, event=None) -> None:
+        index = self.show_combo.current()
+        if index < 0:
+            return
+        self.selected_show = self.shows[index]
+        mark_used(self.selected_show)
+        self.project.set(self.selected_show.project)
+        self.show.set(self.selected_show.title)
+        self.anchor.set(self.selected_show.anchor)
+        # A script's opening belongs to its show; changing shows clears it.
+        self.script.delete("1.0", "end")
+        self._content_changed()
+
+    def _new_show(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("新增節目")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+        title = tk.StringVar(value=DEFAULT_SHOW)
+        anchor = tk.StringVar(value=DEFAULT_ANCHOR)
+        project = tk.StringVar(value=default_project_name())
+        for row, (label, variable) in enumerate((("節目名", title), ("主播名", anchor), ("專案名", project))):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=5)
+            ttk.Entry(frame, textvariable=variable, width=38).grid(row=row, column=1, padx=8)
+        ttk.Label(frame, text="請使用中性名稱，不能包含乘客名字或去姓片段。").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=8)
+        def save():
+            try:
+                show = create_show(title.get(), anchor.get(), project.get(),
+                                   passenger_names=parse_names(self.names.get()))
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("無法建立節目", self._error_message(exc), parent=dialog)
+                return
+            dialog.destroy()
+            self._reload_shows(show.project)
+        ttk.Button(frame, text="建立節目", command=save).grid(row=4, column=1, sticky="e")
+
+    def _validate_selected_show(self, names) -> None:
+        if self.selected_show is None:
+            raise ValueError("請先按「新增節目…」建立節目。")
+        validate_show_privacy(self.selected_show, names)
 
     def _update_topic_hint(self, event=None) -> None:
         try:
@@ -224,6 +295,7 @@ class PrankNewsWindow:
 
     def _clear_deployment(self) -> None:
         self.url.set("")
+        self.feed_url.set("")
         self.qr_label.configure(image="", text="部署完成後顯示 QR code")
         self.qr_image = None
 
@@ -242,10 +314,11 @@ class PrankNewsWindow:
     def _refresh_buttons(self) -> None:
         has_script = bool(self.script.get("1.0", "end-1c").strip() and self.show.get().strip() and self.anchor.get().strip())
         for button, enabled in (
-            (self.generate_button, True), (self.build_button, has_script),
+            (self.generate_button, self.selected_show is not None), (self.build_button, has_script),
             (self.deploy_button, self.out_dir is not None),
             (self.listen_button, self.episode is not None),
             (self.folder_button, self.out_dir is not None), (self.copy_button, bool(self.url.get())),
+            (self.copy_feed_button, bool(self.feed_url.get())),
         ):
             button.configure(state="normal" if enabled and not self.busy else "disabled")
 
@@ -325,7 +398,9 @@ class PrankNewsWindow:
             except ValueError:
                 raise ValueError("新聞長度必須介於 0.5–15 分鐘。") from None
             request = NewsRequest(parse_names(self.names.get()), minutes,
-                                  self.topic.get("1.0", "end-1c"), voice=VOICES[self.voice.get()])
+                                  self.topic.get("1.0", "end-1c"), voice=VOICES[self.voice.get()],
+                                  show_title=self.show.get(), anchor_name=self.anchor.get())
+            self._validate_selected_show(request.passenger_names)
         except (ValueError, KeyError) as exc:
             self._validation_error(exc)
             return
@@ -337,9 +412,7 @@ class PrankNewsWindow:
             return result
 
         def completed(result):
-            show, anchor, script = result
-            self.show.set(show)
-            self.anchor.set(anchor)
+            _, _, script = result
             self.script.delete("1.0", "end")
             self.script.insert("1.0", script)
             self.script.edit_modified(False)
@@ -351,9 +424,13 @@ class PrankNewsWindow:
     def _build(self) -> None:
         if self.busy:
             return
-        # Each build is a new episode. The entry remains editable before deploy.
-        self.project.set(default_project_name())
         passenger_names = parse_names(self.names.get())
+        try:
+            self._validate_selected_show(passenger_names)
+        except ValueError as exc:
+            self._validation_error(exc)
+            return
+        selected_show = self.selected_show
         show, anchor = self.show.get().strip(), self.anchor.get().strip()
         script = self.script.get("1.0", "end-1c")
         voice = VOICES[self.voice.get()]
@@ -365,7 +442,8 @@ class PrankNewsWindow:
             with tempfile.TemporaryDirectory(prefix="prank-news-", dir=output.parent) as temp:
                 episode = synthesize_episode(show, anchor, script, voice, temp, self._progress,
                                              passenger_names=passenger_names)
-                result = build_and_deploy(episode, output, deploy=False, progress=self._progress)
+                result = build_and_deploy(episode, output, deploy=False, progress=self._progress,
+                                          show=selected_show)
             return episode, result["out_dir"]
 
         def completed(result):
@@ -397,6 +475,7 @@ class PrankNewsWindow:
         def completed(result):
             url, qr_path = result
             self.url.set(url)
+            self.feed_url.set(f"https://{project}.vercel.app/feed.xml")
             with Image.open(qr_path) as source:
                 qr = source.convert("RGB").resize((150, 150), Image.Resampling.NEAREST)
             self.qr_image = ImageTk.PhotoImage(qr, master=self.root)
@@ -425,6 +504,11 @@ class PrankNewsWindow:
         self.root.clipboard_clear()
         self.root.clipboard_append(self.url.get())
         self.status.set("網址已複製。")
+
+    def _copy_feed(self) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.feed_url.get())
+        self.status.set("訂閱網址已複製。")
 
     def _callback_error(self, exc_type, exc, traceback) -> None:
         LOGGER.error("介面操作失敗", exc_info=(exc_type, exc, traceback))
