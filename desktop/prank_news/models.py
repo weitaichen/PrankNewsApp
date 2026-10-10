@@ -1,6 +1,6 @@
 """Data shared by the CLI, pipeline, and desktop GUI."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from pathlib import Path
 
@@ -39,3 +39,5 @@ class Episode:
     duration_sec: float
     script: str
     audio_path: Path
+    # Private build context: never serialized into the public episode.json.
+    passenger_names: list[str] = field(default_factory=list)

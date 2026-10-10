@@ -1,3 +1,4 @@
 # Manager task specs and per-worker files (see CLAUDE.md)
 .agent-tasks/
 .agent/
+.cache/

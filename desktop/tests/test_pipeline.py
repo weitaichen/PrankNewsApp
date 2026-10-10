@@ -1,3 +1,8 @@
+import json
+import re
+
+import pytest
+
 from prank_news import pipeline
 
 
@@ -63,3 +68,47 @@ def test_build_deploy_and_qr(monkeypatch, tmp_path, template, episode):
     assert calls == [(result["out_dir"], "prank-news")]
     assert result["url"] == "https://prank-news.vercel.app"
     assert result["qr_path"].is_file()
+
+
+def test_core_default_project_is_neutral(monkeypatch, tmp_path, template, episode):
+    names = []
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, name: names.append(name) or f"https://{name}.vercel.app")
+    result = pipeline.build_and_deploy(episode, tmp_path / "app", template_dir=template)
+    assert re.fullmatch(r"morning-news-[a-z0-9]{6}", names[0])
+    assert "prank" not in result["url"]
+
+
+@pytest.mark.parametrize("show, anchor, title", [
+    ("王小明專屬早報", "小明主播", "小明新聞"),
+    ("小明專屬早報", "王小明", "王小明新聞"),
+])
+def test_build_sanitizes_all_public_metadata(tmp_path, template, episode, show, anchor, title):
+    episode.passenger_names = ["王小明"]
+    episode.show, episode.anchor, episode.title = show, anchor, title
+    result = pipeline.build_and_deploy(episode, tmp_path / "app", deploy=False, template_dir=template)
+    public = (result["out_dir"] / "episode.json").read_text(encoding="utf-8")
+    assert "王小明" not in public and "小明" not in public
+    data = json.loads(public)
+    assert "passenger_names" not in data and "script" not in data
+    metadata = json.loads(public)
+    assert metadata["show"] == metadata["title"] == "晨間新聞快報"
+    assert metadata["anchor"] == "主播 林雅婷"
+
+
+def test_script_file_names_reach_build_guard(monkeypatch, tmp_path, template, request_data):
+    def tts(text, path, voice):
+        path.write_bytes(b"audio")
+        return 5
+
+    monkeypatch.setattr(pipeline, "synthesize", tts)
+    episode = pipeline.generate_episode(request_data, tmp_path / "work",
+        script_text="節目：王小明專屬早報\n主播：小明\n\n王小明早安。")
+    result = pipeline.build_and_deploy(episode, tmp_path / "app", deploy=False, template_dir=template)
+    public = (result["out_dir"] / "episode.json").read_text(encoding="utf-8")
+    assert "王小明" not in public and "小明" not in public
+
+
+def test_default_anchor_cannot_leak_matching_passenger(episode):
+    episode.passenger_names = ["林雅婷"]
+    pipeline.sanitize_metadata(episode)
+    assert "林雅婷" not in episode.anchor and "雅婷" not in episode.anchor

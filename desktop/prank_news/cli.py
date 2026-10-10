@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         template = args.template if args.template is not None else default_template_dir()
         if not template.is_dir():
             raise FileNotFoundError(f"找不到 PWA 範本資料夾：{template}；可用 --template 指定。")
-        output = (args.out or Path("output") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")).resolve()
+        output = args.out or Path("output") / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         output.parent.mkdir(parents=True, exist_ok=True)
         # Keep synthesis work outside the app directory that build_app replaces.
         with tempfile.TemporaryDirectory(prefix="prank-news-", dir=output.parent) as temp:

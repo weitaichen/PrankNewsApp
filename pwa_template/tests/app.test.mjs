@@ -7,7 +7,9 @@ import { setImmediate } from 'node:timers/promises';
 const source = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 const episode = JSON.parse(await readFile(new URL('../episode.json', import.meta.url), 'utf8'));
 
-function playerHarness({ available = true, unsupportedActions = false } = {}) {
+function playerHarness({ available = true, unsupportedActions = false,
+  offlineReady = null, networkAvailable = available, slowWorker = false,
+  workerEpisode = null } = {}) {
   const elements = new Map();
   function element(id) {
     const listeners = new Map();
@@ -55,10 +57,25 @@ function playerHarness({ available = true, unsupportedActions = false } = {}) {
       this.port2 = { postMessage: data => queueMicrotask(() => this.port1.onmessage({ data })) };
     }
   }
-  const worker = { postMessage(message, ports) { ports[0].postMessage({ audioAvailable: available, offlineReady: available }); } };
+  let holdReplies = false;
+  const held = [];
+  const worker = { postMessage(message, ports) {
+    const data = { audioAvailable: available, offlineReady: offlineReady ?? available,
+      ...(workerEpisode ? { episode: workerEpisode } : {}) };
+    const reply = () => ports[0].postMessage(data);
+    if (holdReplies) held.push(reply);
+    else reply();
+  } };
+  const workerListeners = new Map();
+  let becomeReady;
+  const workerReady = slowWorker ? new Promise(resolve => { becomeReady = resolve; }) : Promise.resolve({ active: worker });
   const navigator = {
     mediaSession,
-    serviceWorker: { async register() {}, ready: Promise.resolve({ active: worker }) },
+    serviceWorker: {
+      async register() { return { active: slowWorker ? null : worker }; },
+      ready: workerReady,
+      addEventListener(type, listener) { workerListeners.set(type, listener); },
+    },
   };
   class MediaMetadata { constructor(data) { Object.assign(this, data); } }
   const errors = [];
@@ -66,11 +83,12 @@ function playerHarness({ available = true, unsupportedActions = false } = {}) {
     document, navigator, window: { isSecureContext: true, MediaMetadata },
     MediaMetadata, MessageChannel: Channel, URL,
     location: { href: 'https://example.test/podcast/', origin: 'https://example.test' },
-    setTimeout, clearTimeout,
+    setTimeout(callback, delay) { return setTimeout(callback, slowWorker && delay === 30000 ? 1 : delay); }, clearTimeout,
     console: { error(value) { errors.push(value); } },
-    async fetch(url) {
-      assert.equal(url, './episode.json', 'missing audio must never be fetched by the page');
-      return Response.json(episode);
+    async fetch(url, options) {
+      if (url === './episode.json') return Response.json(workerEpisode || episode);
+      assert.equal(options.method, 'HEAD', 'fallback must not download the entire MP3');
+      return new Response(null, { status: networkAvailable ? 200 : 404 });
     },
   });
   vm.runInContext(source, context);
@@ -78,6 +96,16 @@ function playerHarness({ available = true, unsupportedActions = false } = {}) {
     audio, actions, mediaSession, positions, errors,
     get: id => document.getElementById(id),
     setAvailable(value) { available = value; },
+    activate(value = null) {
+      if (value) workerEpisode = value;
+      navigator.serviceWorker.controller = worker;
+      becomeReady?.({ active: worker });
+      workerListeners.get('controllerchange')?.();
+    },
+    resolveReadyOnly() { becomeReady?.({ active: worker }); },
+    holdStatusReplies() { holdReplies = true; },
+    replyToStatus(index = 0) { held.splice(index, 1)[0](); },
+    async settle() { for (let count = 0; count < 20; count++) await setImmediate(); },
     async ready() {
       for (let attempt = 0; attempt < 20; attempt++) {
         await setImmediate();
@@ -157,4 +185,68 @@ test('unsupported Media Session actions do not prevent page playback', async () 
   await setImmediate();
   assert.equal(player.audio.paused, false);
   assert.deepEqual(player.errors, []);
+});
+
+test('active worker quota failure still enables network streaming without offline badge', async () => {
+  const player = playerHarness({ available: false, networkAvailable: true, offlineReady: false });
+  await player.ready();
+  assert.equal(player.get('play').disabled, false);
+  assert.equal(player.audio.src, 'https://example.test/podcast/episode.mp3');
+  assert.equal(player.get('offline-status').textContent, '目前無法離線儲存，請保持連線收聽');
+  player.get('play').emit('click');
+  await player.settle();
+  assert.equal(player.audio.paused, false);
+});
+
+test('worker becoming ready after preparation timeout eventually shows offline badge', async () => {
+  const player = playerHarness({ slowWorker: true, networkAvailable: true });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await player.settle();
+  assert.equal(player.get('offline-status').textContent, '目前無法離線儲存，請保持連線收聽');
+  player.activate();
+  await player.settle();
+  assert.equal(player.get('offline-status').textContent, '已可離線收聽');
+});
+
+test('controllerchange switches title and audio to the committed new build', async () => {
+  const player = playerHarness();
+  await player.ready();
+  const next = { ...episode, title: '新的一集', audio: 'episode.mp3?v=new', cover: 'cover.png?v=new' };
+  player.activate(next);
+  await player.settle();
+  assert.equal(player.get('episode-title').textContent, '新的一集');
+  assert.equal(player.audio.src, 'https://example.test/podcast/episode.mp3?v=new');
+  assert.equal(player.mediaSession.metadata.title, '新的一集');
+});
+
+test('late ready promise alone refreshes offline status without controllerchange', async () => {
+  const player = playerHarness({ slowWorker: true, networkAvailable: true });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await player.settle();
+  assert.notEqual(player.get('offline-status').textContent, '已可離線收聽');
+  player.resolveReadyOnly();
+  await player.settle();
+  assert.equal(player.get('offline-status').textContent, '已可離線收聽');
+});
+
+test('metadata waits for matching audio status and late old replies cannot revert a new episode', async () => {
+  const player = playerHarness();
+  await player.ready();
+  player.holdStatusReplies();
+  const first = { ...episode, title: '版本 B', audio: 'episode.mp3?v=B' };
+  const second = { ...episode, title: '版本 C', audio: 'episode.mp3?v=C' };
+  player.activate(first);
+  await player.settle();
+  assert.equal(player.get('episode-title').textContent, episode.title);
+  assert.equal(player.audio.src, 'https://example.test/podcast/episode.mp3');
+  player.activate(second);
+  await player.settle();
+  player.replyToStatus(1);
+  await player.settle();
+  assert.equal(player.get('episode-title').textContent, '版本 C');
+  assert.equal(player.audio.src, 'https://example.test/podcast/episode.mp3?v=C');
+  player.replyToStatus(0);
+  await player.settle();
+  assert.equal(player.get('episode-title').textContent, '版本 C');
+  assert.equal(player.audio.src, 'https://example.test/podcast/episode.mp3?v=C');
 });

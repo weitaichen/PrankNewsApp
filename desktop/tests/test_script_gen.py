@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ def test_prompt_names_length_and_constraints(request_data):
         "2–4", "各位聽眾早安", "結尾", "輕鬆無害", "犯罪指控", "疾病死亡",
         "政治人物", "真實品牌負面消息", "節目：xxx", "主播：xxx", "markdown",
         request_data.topic, request_data.style,
+        "不得包含任何乘客名字", "名字片段或內容梗",
     ):
         assert expected in prompt
 
@@ -46,10 +48,16 @@ def test_runner_receives_prompt_utf8_and_timeout(monkeypatch, request_data):
 
     def runner(command, **kwargs):
         captured.update(command=command, **kwargs)
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": "節目：早安\n主播：雅婷\n\n早安。"}))
+        working = Path(kwargs["cwd"])
+        assert working.is_dir() and not list(working.iterdir())
+        assert not working.is_relative_to(Path.cwd())
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": "節目：早安\n主播：雅婷\n\n" + "字" * 375}))
 
-    assert script_gen.generate_script(request_data, runner=runner, timeout=12) == ("早安", "雅婷", "早安。")
-    assert captured["command"] == ["C:/tools/claude.cmd", "-p", "--output-format", "json"]
+    assert script_gen.generate_script(request_data, runner=runner, timeout=12) == ("早安", "雅婷", "字" * 375)
+    assert captured["command"] == ["C:/tools/claude.cmd", "-p", "--output-format", "json",
+                                   "--tools", "", "--strict-mcp-config", "--setting-sources", "",
+                                   "--safe-mode", "--no-session-persistence"]
+    assert not Path(captured["cwd"]).exists()
     prompt = script_gen.build_prompt(request_data)
     assert all(prompt not in arg and request_data.topic not in arg for arg in captured["command"])
     assert captured["input"] == prompt
@@ -83,3 +91,34 @@ def test_cli_timeout(monkeypatch, request_data):
 
     with pytest.raises(script_gen.ScriptGenerationError, match="逾時"):
         script_gen.generate_script(request_data, runner=runner)
+
+
+@pytest.mark.parametrize("first", ["", "字" * 750, "節目：早安\n" + "字" * 750,
+                                  "節目：" + "字" * 800 + "\n主播：雅婷\n",
+                                  "節目：早安\n主播：雅婷\n\n" + "字" * 374])
+def test_invalid_script_retried_once_then_recovers(monkeypatch, request_data, first):
+    monkeypatch.setattr(script_gen.shutil, "which", lambda name: "claude")
+    replies = iter([first, "節目：早安\n主播：雅婷\n\n" + "字" * 375])
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(kwargs["cwd"])
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": next(replies)}))
+
+    assert script_gen.generate_script(request_data, runner=runner)[2] == "字" * 375
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert not Path(calls[0]).exists()
+
+
+@pytest.mark.parametrize("reply", ["請先確認任務。", "節目：早安\n主播：雅婷\n\n太短。"])
+def test_invalid_script_after_retry_raises_chinese_error(monkeypatch, request_data, reply):
+    monkeypatch.setattr(script_gen.shutil, "which", lambda name: "claude")
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": reply}))
+
+    with pytest.raises(script_gen.ScriptGenerationError, match="重試一次仍失敗"):
+        script_gen.generate_script(request_data, runner=runner)
+    assert len(calls) == 2

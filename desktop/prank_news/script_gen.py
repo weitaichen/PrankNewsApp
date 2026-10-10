@@ -5,6 +5,7 @@ import math
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 
 from .models import NewsRequest
@@ -42,6 +43,7 @@ def build_prompt(request: NewsRequest) -> str:
 
 嚴格依下列格式回傳：第一行「節目：xxx」，第二行「主播：xxx」，空一行後是稿子。
 節目與主播名稱請自行取名。只有前兩行是中繼資料，其餘只輸出要唸的純文字。
+節目與主播名稱不得包含任何乘客名字、去掉姓氏的名字片段或內容梗；請使用中性名稱。
 稿子不要 markdown、標題、括號舞台指示、emoji、條列記號或寫作說明。
 """
 
@@ -61,14 +63,20 @@ def clean_script(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def parse_response(text: str) -> tuple[str, str, str]:
-    """Parse the two metadata lines, falling back to spoken text on mismatch."""
-    cleaned = clean_script(text.lstrip("\ufeff"))
-    match = re.match(r"\A節目\s*[：:]\s*([^\n]+)\n主播\s*[：:]\s*([^\n]+)\n+(.*)\Z", cleaned, re.S)
+def _parse_headers(cleaned: str) -> tuple[str, str, str] | None:
+    match = re.match(r"\A節目[ \t]*[：:][ \t]*([^\n]+)\n主播[ \t]*[：:][ \t]*([^\n]+)\n+(.*)\Z", cleaned, re.S)
     if match:
         show, anchor, script = (part.strip() for part in match.groups())
         if show and anchor and script:
             return show, anchor, script
+
+
+def parse_response(text: str) -> tuple[str, str, str]:
+    """Offline scripts may omit metadata; generated responses must include it."""
+    cleaned = clean_script(text.lstrip("\ufeff"))
+    parsed = _parse_headers(cleaned)
+    if parsed:
+        return parsed
     return DEFAULT_SHOW, DEFAULT_ANCHOR, cleaned
 
 
@@ -79,9 +87,26 @@ def generate_script(
     if not executable:
         raise ClaudeNotFoundError("找不到 Claude Code。請先安裝並登入 Claude Code（claude），再重試。")
     run = runner or subprocess.run
+    # Verified with Claude Code 2.1.296 --help. safe-mode preserves subscription
+    # auth while suppressing CLAUDE.md/customizations; never use --bare.
+    with tempfile.TemporaryDirectory(prefix="news-script-") as working:
+        for attempt in range(2):
+            result = _run_claude(executable, run, request, timeout, working)
+            cleaned = clean_script(result.lstrip("\ufeff"))
+            parsed = _parse_headers(cleaned)
+            count = sum(not char.isspace() for char in parsed[2]) if parsed else 0
+            if parsed and count >= round(request.minutes * 250) * 0.5:
+                return parsed
+        raise ScriptGenerationError("Claude 回傳的播報稿缺少節目／主播標頭，或字數不足目標的 50%；重試一次仍失敗，請重新產生。")
+
+
+def _run_claude(executable, run, request, timeout, working) -> str:
     try:
         completed = run(
-            [executable, "-p", "--output-format", "json"],
+            [executable, "-p", "--output-format", "json", "--tools", "",
+             "--strict-mcp-config", "--setting-sources", "", "--safe-mode",
+             "--no-session-persistence"],
+            cwd=working,
             input=build_prompt(request),
             capture_output=True,
             text=True,
@@ -106,9 +131,6 @@ def generate_script(
     if not isinstance(payload, dict) or payload.get("is_error"):
         raise ScriptGenerationError("Claude 無法產生播報稿，請確認登入與訂閱狀態。")
     result = payload.get("result")
-    if not isinstance(result, str) or not result.strip():
+    if not isinstance(result, str):
         raise ScriptGenerationError("Claude 回傳的 result 沒有播報稿文字。")
-    parsed = parse_response(result)
-    if not parsed[2]:
-        raise ScriptGenerationError("Claude 回傳的播報稿為空。")
-    return parsed
+    return result

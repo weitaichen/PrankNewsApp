@@ -48,7 +48,8 @@ async function buildRangeResponse(fullResponse, rangeHeader) {
 
 // A classic worker needs no imports. The guard also allows Node vm unit tests.
 if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
-  const CACHE_VERSION = 'v1';
+  // The literal placeholder also serves as a usable version in the raw template.
+  const CACHE_VERSION = '__BUILD_ID__';
   const BASE = self.registration.scope;
   const CACHE_PREFIX = `news-podcast:${BASE}:`;
   const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
@@ -59,6 +60,7 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') 
   ].map(urlFor);
   const EPISODE_URL = urlFor('./episode.json');
   let refreshPromise;
+  let networkEpisode;
 
   function mediaURLs(episode) {
     return ['audio', 'cover'].map(key => {
@@ -74,27 +76,30 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') 
     return response ? response.json() : null;
   }
 
-  async function cacheMedia(cache, url) {
-    try {
-      // No Range header: Cache API must receive a complete 200, never a 206.
-      const response = await fetch(url, { cache: 'no-store' });
-      if (response.status === 200) await cache.put(url, response);
-      else if (response.status === 404) await cache.delete(url);
-    } catch { /* A missing asset/network outage must not break shell installation. */ }
-  }
-
   async function cacheEpisode() {
     const cache = await caches.open(CACHE_NAME);
+    // A build is immutable. Never refresh an old worker with a newer build's JSON.
+    if (await cachedEpisode(cache)) return true;
     try {
       const response = await fetch(EPISODE_URL, { cache: 'no-store' });
-      if (response.status === 200) {
-        const episode = await response.clone().json();
-        mediaURLs(episode);
-        await cache.put(EPISODE_URL, response);
+      if (response.status !== 200) throw new Error('Episode unavailable.');
+      const episode = await response.clone().json();
+      if (episode.buildId && episode.buildId !== CACHE_VERSION) throw new Error('Build changed during installation.');
+      const urls = mediaURLs(episode);
+      networkEpisode = episode;
+      // Fetch full bodies before committing metadata. Unique per-build caches
+      // and versioned media URLs ensure partial writes never replace old audio.
+      const media = await Promise.all(urls.map(async url => {
+        const asset = await fetch(url, { cache: 'no-store' });
+        if (asset.status !== 200) throw new Error('Incomplete media.');
+        return asset;
+      }));
+      for (let index = 0; index < urls.length; index++) {
+        await cache.put(urls[index], media[index]);
       }
-    } catch { /* Keep an existing episode when refreshing offline. */ }
-    const episode = await cachedEpisode(cache);
-    if (episode) await Promise.all(mediaURLs(episode).map(url => cacheMedia(cache, url)));
+      await cache.put(EPISODE_URL, response);
+      return true;
+    } catch { return false; }
   }
 
   function refreshEpisode() {
@@ -107,7 +112,18 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') 
   async function cacheStatus() {
     const cache = await caches.open(CACHE_NAME);
     const episode = await cachedEpisode(cache);
-    if (!episode) return { audioAvailable: false, offlineReady: false };
+    if (!episode) {
+      // Incomplete first installs still allow streaming; quota is not a 404.
+      if (!networkEpisode) await refreshEpisode();
+      if (await cachedEpisode(cache)) return cacheStatus();
+      let audioAvailable = false;
+      try {
+        if (networkEpisode) {
+          audioAvailable = (await fetch(mediaURLs(networkEpisode)[0], { method: 'HEAD', cache: 'no-store' })).status === 200;
+        }
+      } catch { /* Offline without a committed episode. */ }
+      return { audioAvailable, offlineReady: false, episode: networkEpisode };
+    }
     const [audioURL, coverURL] = mediaURLs(episode);
     const audio = await cache.match(audioURL);
     const cover = await cache.match(coverURL);
@@ -115,22 +131,34 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') 
     return {
       audioAvailable: audio?.status === 200,
       offlineReady: audio?.status === 200 && cover?.status === 200 && shellReady,
+      episode,
     };
   }
 
   self.addEventListener('install', event => {
     event.waitUntil((async () => {
       const cache = await caches.open(CACHE_NAME);
-      await cache.addAll(SHELL);
-      await refreshEpisode();
+      await cache.addAll(SHELL.map(url => new Request(url, { cache: 'reload' })));
+      const complete = await refreshEpisode() && (await cacheStatus()).offlineReady;
+      if (!complete) {
+        const previous = (await caches.keys()).filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME);
+        for (const key of previous) {
+          if (await cachedEpisode(await caches.open(key))) {
+            // Reject this update; the complete old worker and cache remain active.
+            throw new Error('New episode is not fully cached.');
+          }
+        }
+      }
       await self.skipWaiting();
     })());
   });
 
   self.addEventListener('activate', event => {
     event.waitUntil((async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME).map(key => caches.delete(key)));
+      if ((await cacheStatus()).offlineReady) {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME).map(key => caches.delete(key)));
+      }
       await self.clients.claim();
     })());
   });
@@ -163,7 +191,7 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') 
         const response = await fetch(request);
         // Only complete audio responses may enter the cache.
         if (request.url === audioURL && response.status === 200) {
-          event.waitUntil(cache.put(audioURL, response.clone()));
+          event.waitUntil(cache.put(audioURL, response.clone()).catch(() => {}));
         }
         return response;
       } catch {

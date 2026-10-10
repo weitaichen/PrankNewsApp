@@ -1,4 +1,7 @@
 import json
+import re
+
+import pytest
 
 from prank_news import cli, pipeline
 
@@ -34,3 +37,39 @@ def test_cli_script_file_full_local_build(monkeypatch, tmp_path, template, capsy
 def test_cli_invalid_request_returns_failure(capsys):
     assert cli.main(["--name", "測試", "--minutes", "99"]) == 1
     assert "0.5–15" in capsys.readouterr().err
+
+
+def test_cli_default_project_uses_core_generator(monkeypatch, tmp_path, template):
+    names = []
+    def tts(text, path, voice):
+        path.write_bytes(b"audio")
+        return 1
+    monkeypatch.setattr(pipeline, "synthesize", tts)
+    monkeypatch.setattr(pipeline, "deploy_app", lambda directory, name: names.append(name) or f"https://{name}.vercel.app")
+    script = tmp_path / "script.txt"
+    script.write_text("早安。", encoding="utf-8")
+    assert cli.main(["--name", "王小明", "--script-file", str(script), "--deploy",
+                     "--out", str(tmp_path / "app"), "--template", str(template)]) == 0
+    assert re.fullmatch(r"morning-news-[a-z0-9]{6}", names[0])
+
+
+def test_cli_rejects_symlink_output_without_deleting_target(monkeypatch, tmp_path, template, capsys):
+    target = tmp_path / "existing"
+    target.mkdir()
+    marker = target / "keep.txt"
+    marker.write_text("keep")
+    output = tmp_path / "linked-output"
+    try:
+        output.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"此 Windows 環境無建立 symlink 權限：{exc}")
+    def tts(text, path, voice):
+        path.write_bytes(b"audio")
+        return 1
+    monkeypatch.setattr(pipeline, "synthesize", tts)
+    script = tmp_path / "script.txt"
+    script.write_text("早安。", encoding="utf-8")
+    assert cli.main(["--name", "王小明", "--script-file", str(script), "--out", str(output),
+                     "--template", str(template)]) == 1
+    assert "連結" in capsys.readouterr().err
+    assert output.is_symlink() and marker.read_text() == "keep"

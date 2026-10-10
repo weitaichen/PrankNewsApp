@@ -5,7 +5,9 @@ import math
 import shutil
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from .models import Episode
 
@@ -60,19 +62,24 @@ def build_app(
             ignore=shutil.ignore_patterns(
                 "tests", "README.md", "episode.json", "episode.mp3",
                 ".git", ".vercel", "__pycache__", ".pytest_cache",
+                "node_modules",
             ),
         )
         shutil.copy2(audio, staged / "episode.mp3")
         if cover is not None:
             shutil.copy2(cover, staged / "cover.png")
+        build_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + "-" + uuid4().hex
+        worker = staged / "sw.js"
+        worker.write_text(worker.read_text(encoding="utf-8").replace("__BUILD_ID__", build_id), encoding="utf-8")
         metadata = {
+            "buildId": build_id,
             "show": episode.show,
             "title": episode.title,
             "anchor": episode.anchor,
             "published": episode.published,
             "durationSec": round(episode.duration_sec, 3),
-            "audio": "episode.mp3",
-            "cover": "cover.png",
+            "audio": f"episode.mp3?v={build_id}",
+            "cover": f"cover.png?v={build_id}",
             "description": "今日頭條新聞",
         }
         (staged / "episode.json").write_text(
