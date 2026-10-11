@@ -13,7 +13,7 @@ def test_build_structure_metadata_and_headers(tmp_path, template, episode):
     (output / "stale.txt").write_text("old")
     assert build_app(template, output, episode) == output
     assert {path.name for path in output.iterdir()} == {
-        "index.html", "sw.js", "manifest.webmanifest", "cover.png", "assets",
+        "index.html", "sw.js", "manifest.json", "cover.png", "assets",
         "episode.json", "episode.mp3", "vercel.json",
     }
     assert (output / "assets" / "app.js").is_file()

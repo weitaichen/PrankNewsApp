@@ -20,7 +20,7 @@ def template(tmp_path):
     root.mkdir()
     for name, content in {
         "index.html": "<html>news</html>", "sw.js": "// service worker",
-        "manifest.webmanifest": "{}", "README.md": "private documentation",
+        "manifest.json": "{}", "README.md": "private documentation",
         "episode.json": "old metadata", "episode.mp3": "old audio",
     }.items():
         (root / name).write_text(content, encoding="utf-8")

@@ -18,6 +18,9 @@ from .models import Episode
 from .show import load_show
 
 
+REQUIRED_TEMPLATE_FILES = ("index.html", "sw.js", "manifest.json", "cover.png")
+
+
 def default_template_dir() -> Path:
     """Support source checkouts and PyInstaller's bundled data directory."""
     if hasattr(sys, "_MEIPASS"):
@@ -168,7 +171,7 @@ def validate_show_build(show_dir: str | Path, template_dir: str | Path,
             or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
         raise ValueError("節目網址必須是 https 絕對網址，且不可含路徑或查詢。")
     base_url = base_url.rstrip("/")
-    for name in ("index.html", "sw.js", "manifest.webmanifest", "cover.png"):
+    for name in REQUIRED_TEMPLATE_FILES:
         if not (template / name).is_file():
             raise FileNotFoundError(f"找不到 PWA 範本檔案：{template / name}")
     return template, output
