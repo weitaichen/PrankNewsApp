@@ -12,6 +12,41 @@ from prank_news.show import create_show, add_episode
 WHEN = datetime(2026, 10, 10, 8, tzinfo=timezone(timedelta(hours=8)))
 
 
+@pytest.mark.parametrize("name", builder.REQUIRED_TEMPLATE_FILES)
+def test_required_files_exist_in_real_template(name):
+    assert (builder.default_template_dir() / name).is_file()
+
+
+@pytest.mark.parametrize("name", builder.REQUIRED_TEMPLATE_FILES)
+def test_validate_show_build_rejects_missing_required_file(tmp_path, template, name):
+    show = create_show()
+    (template / name).unlink()
+    with pytest.raises(FileNotFoundError, match=name.replace(".", r"\.")):
+        builder.validate_show_build(show.directory, template, tmp_path / "app", show.base_url)
+
+
+def test_validate_and_build_show_with_real_template(tmp_path, monkeypatch):
+    template = builder.default_template_dir()
+    show = create_show(root_dir=tmp_path / "shows")
+    audio = tmp_path / "source.mp3"
+    audio.write_bytes(b"fake-mp3-for-copy-test")
+    episode = add_episode(show, audio, 3, when=WHEN)
+    output = tmp_path / "app"
+    # Exercise the real cover fallback without depending on installed fonts.
+    monkeypatch.setattr(builder, "FONT_PATHS", [])
+
+    assert builder.validate_show_build(show.directory, template, output, show.base_url) == (
+        template.resolve(), output.resolve(),
+    )
+    assert builder.build_show_site(show.directory, template, output, show.base_url) == output
+    for name in ("feed.xml", "index.html", "manifest.json", f"episodes/{episode['id']}.mp3"):
+        assert (output / name).is_file()
+    assert (output / "manifest.json").read_bytes() == (template / "manifest.json").read_bytes()
+    assert (output / episode["file"]).read_bytes() == audio.read_bytes()
+    channel = ET.parse(output / "feed.xml").getroot().find("channel")
+    assert channel.find("item/enclosure").get("url") == f"{show.base_url}/{episode['file']}"
+
+
 def test_rss_namespaces_https_enclosures_order_guids_and_latest_player(tmp_path, template):
     show = create_show('晨間 & <新聞> "快報"', '主播 & 林雅婷', project="morning-news-rss",
                        description="今日 & 明日 <新聞>")
